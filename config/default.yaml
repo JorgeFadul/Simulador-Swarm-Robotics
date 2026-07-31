@@ -1,0 +1,18 @@
+grid_size: 20
+map_width: 1000
+map_height: 1000
+fps: 60
+num_robots: 10
+
+pixels_per_cm: 5
+
+robot_radius_cm: 3.5
+detection_radius_cm: 10.0
+robot_max_speed_cm_s: 15.0
+random_walk_interval_min: 1.0
+random_walk_interval_max: 3.0
+exploration_threshold: 0.99
+exploration_radius_multiplier: 1.5
+robot_turn_speed_rad_s: 3.14159
+
+walls: []

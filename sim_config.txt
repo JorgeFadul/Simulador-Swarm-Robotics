@@ -1,0 +1,8 @@
+robot_radius_cm=3.5
+robot_max_speed_cm_s=15.0
+robot_turn_speed_rad_s=3.14159
+detection_radius_cm=5.0
+exploration_radius_multiplier=1.5
+random_walk_interval_min=1.0
+random_walk_interval_max=5.0
+strategy=Random Walk
