@@ -18,6 +18,7 @@ El sistema combina dos ventanas:
 - **Evitación reactiva de obstáculos:** vector de alejamiento promedio sobre obstáculos visibles dentro del radio de detección; en modo dirigido se usa para salir de atascos sin abandonar el objetivo.
 - **Exploración individual y global:** cada robot mantiene su propio mapa `explored_robot`, y el mapa global agrega todas las percepciones. Los objetivos se generan solo a partir del mapa descubierto (ningún robot conoce el mapa total).
 - **Visualización de la intención de movimiento:** línea punteada cian con punta de flecha que indica hacia dónde y cuánto avanzará el robot según su plan actual.
+- **Capas de planificación configurables:** las casillas de la pestaña Controles permiten mostrar u ocultar por separado la máscara de fronteras, los objetivos asignados y la línea de intención, sin detener la simulación.
 - **Editor integrado:** colocar robots, dibujar/borrar paredes por celda y cambiar el tamaño de la grilla.
 - **Configuración persistente:** los parámetros se cargan de `sim_config.txt` al iniciar (si el archivo no existe, se usan los valores por defecto de `config/default.yaml`).
 - **Mini-mapas por robot** en pantalla, más mapas de exploración individuales y métricas de cobertura en la ventana de estadísticas.
@@ -74,7 +75,7 @@ Se abren las dos ventanas. Para salir, cierra la ventana de Pygame o presiona la
 - **Individual:** selecciona un robot del desplegable; muestra un gráfico de barras con sus métricas (celdas exploradas, visitadas, paredes vistas) y su mini-mapa de exploración.
 - **Cobertura:** vista general de la cobertura de exploración.
 - **Global:** tiempo simulado, FPS, pasos totales, porcentajes de cobertura y cantidad de robots.
-- **Controles:** herramientas, tamaño de grilla, población (botón "Poblar" agrega robots en posiciones libres), parámetros editables del robot, selección de estrategia, botones de simular/pausar/detener y guardar/cargar configuración.
+- **Controles:** herramientas, tamaño de grilla, población (botón "Poblar" agrega robots en posiciones libres), parámetros editables del robot, selección de estrategia, casillas para mostrar/ocultar capas de planificación (fronteras, objetivos e intención), botones de simular/pausar/detener y guardar/cargar configuración.
 
 ## Configuración
 

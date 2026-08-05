@@ -158,6 +158,21 @@ class StatsWindow:
                       state="readonly", width=30).pack(side="left")
 
         ttk.Separator(f, orient="horizontal").pack(fill="x", pady=8)
+        ttk.Label(f, text="Visualizacion de planificacion:",
+                  font=("Arial", 10, "bold")).pack(anchor="w")
+        vis_frame = ttk.Frame(f)
+        vis_frame.pack(fill="x", pady=4)
+        self.ver_fronteras_var = tk.BooleanVar(value=self.sim.ver_fronteras)
+        self.ver_objetivos_var = tk.BooleanVar(value=self.sim.ver_objetivos)
+        self.ver_intencion_var = tk.BooleanVar(value=self.sim.ver_intencion)
+        ttk.Checkbutton(vis_frame, text="Fronteras", variable=self.ver_fronteras_var,
+                        command=self._aplicar_visual).pack(side="left", padx=2)
+        ttk.Checkbutton(vis_frame, text="Objetivos", variable=self.ver_objetivos_var,
+                        command=self._aplicar_visual).pack(side="left", padx=2)
+        ttk.Checkbutton(vis_frame, text="Intencion", variable=self.ver_intencion_var,
+                        command=self._aplicar_visual).pack(side="left", padx=2)
+
+        ttk.Separator(f, orient="horizontal").pack(fill="x", pady=8)
 
         # --- Simulacion ---
         ttk.Label(f, text="Simulacion:", font=("Arial", 10, "bold")).pack(anchor="w")
@@ -312,6 +327,11 @@ class StatsWindow:
 
     def _iniciar_sim(self):
         self.sim.iniciar()
+
+    def _aplicar_visual(self):
+        self.sim.ver_fronteras = self.ver_fronteras_var.get()
+        self.sim.ver_objetivos = self.ver_objetivos_var.get()
+        self.sim.ver_intencion = self.ver_intencion_var.get()
 
     def _pausar_sim(self):
         if self.sim.estado == "running":

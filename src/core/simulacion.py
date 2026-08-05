@@ -31,6 +31,9 @@ class Simulacion:
         self.fps_actual = 0.0
         self.tiempo_final = None
         self.planner = None
+        self.ver_fronteras = True
+        self.ver_objetivos = True
+        self.ver_intencion = True
 
     def _reconstruir_mundo(self):
         self.mundo = Mundo(self.cfg)
@@ -173,7 +176,10 @@ class Simulacion:
     def render(self):
         if not self.mundo:
             return
-        self.renderer.draw(self.mundo, self.estado, plan=self.planner)
+        self.renderer.draw(self.mundo, self.estado, plan=self.planner,
+                           ver_fronteras=self.ver_fronteras,
+                           ver_objetivos=self.ver_objetivos,
+                           ver_intencion=self.ver_intencion)
         self._draw_mode_hud()
         pygame.display.flip()
 
