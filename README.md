@@ -11,9 +11,12 @@ El sistema combina dos ventanas:
 
 - **Exploración SLAM por celda en tres niveles:** cada celda del mapa puede estar `SCOUTED` (avistada), `VISITED` (pisada por un robot) o `DISCOVERED` (es una pared que el robot ha visto o chocado).
 - **Sensado con línea de vista (LOS):** los sensores de los robots no atraviesan paredes. Una pared solo es `DISCOVERED` cuando un robot la ve o la choca físicamente (no se "adivina" la geometría).
-- **Robot como máquina de estados:** `STOPPED`, `ROTATING` y `MOVING`, con velocidad de giro limitada y detección de colisión frontal (obstáculos y otros robots).
-- **Evitación reactiva de obstáculos:** vector de alejamiento promedio sobre obstáculos visibles dentro del radio de detección.
-- **Exploración individual y global:** cada robot mantiene su propio mapa `explored_robot`, y el mapa global agrega todas las percepciones.
+- **Exploración cooperativa multi-robot:** el planificador global genera objetivos desde el mapa combinado y los reparte entre los robots libres (generación de objetivos + asignación de tareas).
+- **Estrategias de exploración:** *Frontier Based* (Yamauchi), *Sample Based* (next-best-view por muestreo) e *Hybrid* (mejor punto de vista por región de frontera), además del *Random Walk*.
+- **Motion planning (A\*):** cada objetivo se planifica como una ruta de celdas sobre el mapa libre; las celdas exploradas tienen costo bajo y las desconocidas costo alto (se cruzan de forma optimista si es necesario).
+- **Robots como máquina de estados:** `STOPPED`, `ROTATING` y `MOVING`, con velocidad de giro limitada y detección de colisión frontal (obstáculos y otros robots).
+- **Evitación reactiva de obstáculos:** vector de alejamiento promedio sobre obstáculos visibles dentro del radio de detección; en modo dirigido se usa para salir de atascos sin abandonar el objetivo.
+- **Exploración individual y global:** cada robot mantiene su propio mapa `explored_robot`, y el mapa global agrega todas las percepciones. Los objetivos se generan solo a partir del mapa descubierto (ningún robot conoce el mapa total).
 - **Visualización de la intención de movimiento:** línea punteada cian con punta de flecha que indica hacia dónde y cuánto avanzará el robot según su plan actual.
 - **Editor integrado:** colocar robots, dibujar/borrar paredes por celda y cambiar el tamaño de la grilla.
 - **Configuración persistente:** los parámetros se cargan de `sim_config.txt` al iniciar (si el archivo no existe, se usan los valores por defecto de `config/default.yaml`).
@@ -88,7 +91,16 @@ Formato `clave=valor`, una por línea. Se escribe con el botón "Guardar config"
 | `exploration_radius_multiplier`   | (adim)      | Multiplicador del radio de exploración (mapa SLAM) |
 | `random_walk_interval_min`        | s           | Duración mínima de cada tramo de movimiento |
 | `random_walk_interval_max`        | s           | Duración máxima de cada tramo        |
-| `strategy`                        | -           | Estrategia seleccionada              |
+| `strategy`                        | -           | Estrategia de exploración (`Random Walk`, `Frontier Based`, `Sample Based`, `Hybrid`) |
+| `exploration_goal`                | (0-1)       | Fracción del mapa que debe descubrirse para completar la simulación |
+| `plan_interval_s`                 | s           | Intervalo de regeneración de objetivos y asignación de tareas |
+| `goal_reached_radius_px`          | px          | Radio de llegada para considerar alcanzado un objetivo |
+| `goal_timeout_s`                  | s           | Tiempo mínimo antes de descartar un objetivo (se amplía según la longitud de la ruta) |
+| `frontier_min_size`               | celdas      | Tamaño mínimo de una región de frontera para generar un objetivo |
+| `sample_candidates`               | -           | Candidatos muestreados por el generador *Sample Based* |
+| `sample_per_cluster`              | -           | Puntos de vista muestreados por región en *Hybrid* |
+| `sample_cost_weight`              | (adim)      | Peso del costo (distancia) en la función de puntaje |
+| `sample_targets`                  | -           | Máximo de objetivos devueltos por los generadores basados en muestreo |
 
 Las distancias físicas (cm) se convierten a píxeles según `pixels_per_cm`. Si el archivo no existe, falta o un valor no es numérico, se ignora y se conservan los valores por defecto.
 
@@ -111,11 +123,13 @@ simulador-swarm-2d/
 │   │   ├── mundo.py           # Mundo, grilla, LOS, paredes, sensores, colisiones
 │   │   └── simulacion.py      # Orquesta Pygame, editor y el bucle de simulación
 │   ├── robots/
-│   │   └── robot.py           # Máquina de estados, exploración propia, intención
+│   │   └── robot.py           # Máquina de estados, navegación por waypoints, exploración propia, intención
 │   ├── gui/
-│   │   ├── renderer.py        # Dibujado del mapa, robots, intención y mini-mapas
+│   │   ├── renderer.py        # Dibujado del mapa, robots, intención, fronteras y mini-mapas
 │   │   └── stats_window.py    # Ventana Tkinter de estadísticas y controles
-│   ├── algorithms/            # (reservado para estrategias de exploración)
+│   ├── algorithms/
+│   │   ├── exploration.py     # Generadores de objetivos y asignación de tareas (ExplorationPlanner)
+│   │   └── pathfinding.py     # A* ponderado sobre el grid para motion planning
 │   └── utils/                 # (utilidades)
 ```
 
@@ -144,6 +158,20 @@ simulador-swarm-2d/
 
 La máquina de estados (`STOPPED` -> `ROTATING` -> `MOVING`) rota hacia el ángulo objetivo a velocidad limitada y luego avanza a velocidad crucero con aceleración suave. El temporizador de cada tramo (`timer`) **solo avanza mientras el robot está en `MOVING`**, por lo que el tiempo de giro no reduce la duración del movimiento planificado.
 
+## Exploración cooperativa
+
+El esquema de planificación sigue tres etapas (generación de objetivos, asignación de tareas y motion planning):
+
+1. **Generación de objetivos** (`src/algorithms/exploration.py`). A partir del mapa combinado `mundo.explored` se calculan las celdas de frontera (libres exploradas adyacentes a desconocidas) y se agrupan en regiones conexas:
+   - `FrontierBased`: un objetivo por región (centroide de Yamauchi), puntaje por ganancia de área visible menos costo de distancia.
+   - `SampleBased`: muestrea candidatos aleatorios (NBV) y los puntúa por ganancia de área desconocida visible menos costo, quedándose con los mejores.
+   - `Hybrid`: muestrea varios puntos de vista por región de frontera y conserva el mejor de cada una (Charrow et al.).
+   - `Random Walk`: sin planificador; cada robot se mueve aleatoriamente.
+2. **Asignación de tareas** (`ExplorationPlanner`). Cada `plan_interval_s` se regeneran los objetivos y se asignan a los robots libres, prefiriendo los que tienen línea de vista al objetivo y, en igualdad, el más cercano. Los objetivos inalcanzables o abandonados por timeout se marcan como `no_go` temporalmente para repartir a los robots.
+3. **Motion planning** (`src/algorithms/pathfinding.py`). Cada objetivo asignado se planifica con A* sobre el grid: las celdas libres exploradas tienen costo 1, las libres desconocidas costo 6 (se atraviesan de forma optimista si hace falta) y las paredes son intransitables. El robot sigue los waypoints y, si queda atascado (pared u otro robot), se desvía con el vector de repulsión y replanifica al recuperar el contacto.
+
+La simulación termina cuando el mapa combinado alcanza la fracción `exploration_goal` o cuando no quedan celdas de frontera (no se exige visitar todas las celdas, solo descubrir el mapa).
+
 ### Intención de movimiento
 
 Cada robot expone su plan actual:
@@ -170,7 +198,9 @@ No hay framework de pruebas configurado; la validación se hace con scripts head
 - Ningún robot colocado dentro de una pared tras poblar 2000 veces.
 - API de intención de movimiento y su renderizado.
 - El temporizador de movimiento no avanza durante la rotación.
+- Generación de objetivos en las tres estrategias (Frontier/Sample/Hybrid).
+- Bucles completos de exploración hasta la terminación para las tres estrategias y el random walk (verificación headless).
 
 ## Estado del proyecto
 
-Simulador funcional con editor, sensado por línea de vista, exploración SLAM por celda, métricas por robot/global, persistencia de configuración y visualización de intención. La carpeta `src/algorithms/` está reservada para la implementación de estrategias de exploración más allá del random walk.
+Simulador funcional con editor, sensado por línea de vista, exploración SLAM por celda, exploración cooperativa multi-robot (frontier, sample e hybrid), motion planning con A*, asignación de tareas por planificador global, métricas por robot/global, persistencia de configuración y visualización de intención y fronteras.

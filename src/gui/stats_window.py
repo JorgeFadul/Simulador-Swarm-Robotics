@@ -154,7 +154,7 @@ class StatsWindow:
         strat_frame = ttk.Frame(f)
         strat_frame.pack(fill="x", pady=4)
         ttk.Combobox(strat_frame, textvariable=self.strategy_var,
-                      values=["Random Walk", "Exploracion Sistematica", "Barrido"],
+                      values=["Random Walk", "Frontier Based", "Sample Based", "Hybrid"],
                       state="readonly", width=30).pack(side="left")
 
         ttk.Separator(f, orient="horizontal").pack(fill="x", pady=8)
@@ -311,7 +311,7 @@ class StatsWindow:
         self.sim.mundo.reiniciar_exploracion()
 
     def _iniciar_sim(self):
-        self.sim.estado = "running"
+        self.sim.iniciar()
 
     def _pausar_sim(self):
         if self.sim.estado == "running":
@@ -334,6 +334,10 @@ class StatsWindow:
         if m is None:
             return
         self.estado_label.config(text=f"Estado: {self.sim.estado.upper()}")
+        if self.sim.estado == "completado":
+            self.estado_label.config(foreground="#ffcc00")
+        else:
+            self.estado_label.config(foreground="#8888ff")
         if self.tool_var.get() != self.sim.herramienta:
             self.tool_var.set(self.sim.herramienta)
         self._actualizar_lista_robots()
@@ -475,9 +479,18 @@ class StatsWindow:
         d = m._paredes_vistas
         pct_libres = 100.0 * (v + s) / libres if libres else 0
         pct_paredes = 100.0 * d / paredes if paredes else 0
+        pct_total = 100.0 * (v + s + d) / total if total else 0
         tiempo = self.sim.tiempo_simulado
         fps = self.sim.fps_actual
+        estrategia = self.sim.cfg.strategy
+        pendientes = self.sim.planner.objetivos_pendientes if self.sim.planner else 0
+        if self.sim.estado == "completado":
+            resultado = (f"COMPLETADO: mapa al {pct_total:.1f}% en {self.sim.tiempo_final:.2f} s\n"
+                         f"(no es necesario visitar todas las casillas)\n")
+        else:
+            resultado = f"Objetivos pendientes: {pendientes}\n"
         texto = (
+            f"Estrategia:        {estrategia}\n"
             f"Tiempo simulado:   {tiempo:.2f} s\n"
             f"FPS:               {fps:.1f}\n"
             f"Pasos totales:     {self.sim.pasos_totales}\n"
@@ -492,9 +505,11 @@ class StatsWindow:
             f"---\n"
             f"Cobertura libre:   {pct_libres:.1f}%\n"
             f"Cobertura paredes: {pct_paredes:.1f}%\n"
-            f"Cobertura total:   {100.0*(v+s+d)/total:.1f}%\n"
+            f"Mapa descubierto:  {pct_total:.1f}%\n"
             f"---\n"
             f"Robots:            {len(m.robots)}\n"
+            f"---\n"
+            f"{resultado}"
         )
         self.text_global.config(state="normal")
         self.text_global.delete("1.0", "end")

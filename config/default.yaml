@@ -15,4 +15,15 @@ exploration_threshold: 0.99
 exploration_radius_multiplier: 1.5
 robot_turn_speed_rad_s: 3.14159
 
+strategy: "Frontier Based"
+exploration_goal: 0.99
+plan_interval_s: 1.0
+goal_reached_radius_px: 15
+goal_timeout_s: 10.0
+frontier_min_size: 1
+sample_candidates: 40
+sample_per_cluster: 8
+sample_cost_weight: 0.02
+sample_targets: 12
+
 walls: []

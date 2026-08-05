@@ -5,6 +5,7 @@ from .config import Config
 from .mundo import Mundo
 from ..robots.robot import Robot
 from ..gui.renderer import Renderer
+from ..algorithms.exploration import ExplorationPlanner
 
 
 class Simulacion:
@@ -28,11 +29,36 @@ class Simulacion:
         self.tiempo_simulado = 0.0
         self.pasos_totales = 0
         self.fps_actual = 0.0
+        self.tiempo_final = None
+        self.planner = None
 
     def _reconstruir_mundo(self):
         self.mundo = Mundo(self.cfg)
         self.tiempo_simulado = 0.0
         self.pasos_totales = 0
+        self.tiempo_final = None
+        self.planner = None
+
+    def _crear_planner(self):
+        strat = self.cfg.strategy
+        if strat in ("Frontier Based", "Sample Based", "Hybrid"):
+            return ExplorationPlanner(self.cfg, strat)
+        return None
+
+    def iniciar(self):
+        """Arranca la simulacion desde el editor: resetea exploracion, crea el
+        planner segun la estrategia y pone los robots en modo dirigido."""
+        if self.mundo is None or not self.mundo.robots:
+            return
+        self.mundo.reiniciar_exploracion()
+        for r in self.mundo.robots:
+            r.reiniciar_exploracion()
+            r.reiniciar_objetivo()
+        self.planner = self._crear_planner()
+        self.tiempo_simulado = 0.0
+        self.pasos_totales = 0
+        self.tiempo_final = None
+        self.estado = "running"
 
     def poblar_robots(self, n):
         for _ in range(n):
@@ -42,11 +68,28 @@ class Simulacion:
             robot = Robot(x, y, self.cfg, self.rng)
             self.mundo.robots.append(robot)
 
+    def _termino(self, mundo):
+        if mundo.porcentaje_descubierto >= self.cfg.exploration_goal:
+            return True
+        if self.planner is None or not self.planner._alguna_vez_hubo_fronteras:
+            return False
+        fm = self.planner.frontera_mask
+        if fm is None:
+            return False
+        return int(fm.sum()) == 0
+
     def step(self):
-        if self.estado == "running" and self.mundo:
-            self.mundo.update(0.05)
-            self.tiempo_simulado += 0.05
-            self.pasos_totales += 1
+        if self.estado != "running" or not self.mundo:
+            return
+        if self._termino(self.mundo):
+            self.estado = "completado"
+            self.tiempo_final = self.tiempo_simulado
+            return
+        if self.planner:
+            self.planner.actualizar(self.mundo, self.tiempo_simulado)
+        self.mundo.update(0.05)
+        self.tiempo_simulado += 0.05
+        self.pasos_totales += 1
 
     def manejar_evento(self, event):
         if self.estado != "edicion":
@@ -130,7 +173,7 @@ class Simulacion:
     def render(self):
         if not self.mundo:
             return
-        self.renderer.draw(self.mundo, self.estado)
+        self.renderer.draw(self.mundo, self.estado, plan=self.planner)
         self._draw_mode_hud()
         pygame.display.flip()
 
@@ -150,3 +193,14 @@ class Simulacion:
 
             titulo = fuente.render("EDITOR", True, (100, 200, 255))
             self.screen.blit(titulo, (self.cfg.map_width - 80, 10))
+            return
+
+        fuente = pygame.font.SysFont("Arial", 14)
+        pct = self.mundo.porcentaje_descubierto * 100.0
+        if self.estado == "completado":
+            msg = f"COMPLETADO - mapa {pct:.1f}% en {self.tiempo_final:.1f} s"
+            surf = fuente.render(msg, True, (255, 220, 60))
+        else:
+            msg = f"{self.cfg.strategy} - descubierto {pct:.1f}%"
+            surf = fuente.render(msg, True, (150, 220, 255))
+        self.screen.blit(surf, (10, 10))

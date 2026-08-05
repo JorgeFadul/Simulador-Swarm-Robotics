@@ -9,15 +9,35 @@ class Renderer:
         self.screen = screen
         self._thumb_bg = None
 
-    def draw(self, mundo: Mundo, estado="running"):
+    def draw(self, mundo: Mundo, estado="running", plan=None):
         self.screen.fill((20, 20, 30))
         self._draw_exploracion(mundo, estado)
+        if plan is not None and getattr(plan, "frontera_mask", None) is not None:
+            self._draw_fronteras(mundo, plan.frontera_mask)
         self._draw_grid(mundo)
         self._draw_walls(mundo)
+        self._draw_goals(mundo)
         self._draw_intents(mundo)
         self._draw_robots(mundo)
         if mundo.robots:
             self._draw_robot_thumbnails(mundo)
+
+    def _draw_fronteras(self, mundo: Mundo, mask):
+        gs = mundo.cfg.grid_size
+        rows, cols = mask.shape
+        for r in range(rows):
+            for c in range(cols):
+                if mask[r, c]:
+                    pygame.draw.rect(self.screen, (0, 90, 110), (c * gs, r * gs, gs, gs))
+
+    def _draw_goals(self, mundo: Mundo):
+        color = (255, 80, 255)
+        for robot in mundo.robots:
+            if robot.goal_mode and robot.goal is not None and not robot.goal_alcanzado:
+                gx, gy = int(robot.goal[0]), int(robot.goal[1])
+                pygame.draw.circle(self.screen, color, (gx, gy), 5, 1)
+                pygame.draw.line(self.screen, color,
+                                 (int(robot.x), int(robot.y)), (gx, gy), 1)
 
     def _draw_exploracion(self, mundo: Mundo, estado="running"):
         gs = mundo.cfg.grid_size

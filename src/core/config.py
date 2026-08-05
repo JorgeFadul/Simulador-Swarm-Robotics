@@ -34,6 +34,16 @@ class Config:
         self.robot_turn_speed_rad_s: float = float(raw.get("robot_turn_speed_rad_s", math.pi))
         self.strategy: str = str(raw.get("strategy", "Random Walk"))
 
+        self.exploration_goal: float = float(raw.get("exploration_goal", 1.0))
+        self.plan_interval_s: float = float(raw.get("plan_interval_s", 1.0))
+        self.goal_reached_radius_px: float = float(raw.get("goal_reached_radius_px", 15.0))
+        self.goal_timeout_s: float = float(raw.get("goal_timeout_s", 10.0))
+        self.frontier_min_size: int = int(raw.get("frontier_min_size", 3))
+        self.sample_candidates: int = int(raw.get("sample_candidates", 40))
+        self.sample_per_cluster: int = int(raw.get("sample_per_cluster", 8))
+        self.sample_cost_weight: float = float(raw.get("sample_cost_weight", 0.02))
+        self.sample_targets: int = int(raw.get("sample_targets", 12))
+
         self.walls: list[dict] = raw.get("walls", [])
 
         self.cols = self.map_width // self.grid_size

@@ -130,6 +130,14 @@ class Mundo:
         return (libres_vistas / self.total_libres >= self.exploration_threshold and
                 self._paredes_vistas / self.total_paredes >= self.exploration_threshold)
 
+    @property
+    def porcentaje_descubierto(self):
+        """Fraccion del mapa (libres + paredes) ya descubierta por el enjambre."""
+        total = self.rows * self.cols
+        if total == 0:
+            return 0.0
+        return (self._scouteadas + self._visitadas + self._paredes_vistas) / total
+
     def _crear_paredes_perimetrales(self):
         gs = self.cfg.grid_size
         w, h = self.width_px, self.height_px
@@ -255,9 +263,10 @@ class Mundo:
                         count += 1
         return count
 
-    def detectar_en_rango(self, x, y, radius):
+    def detectar_en_rango(self, x, y, radius, incluir_paredes=True):
         """Devuelve vector de alejamiento promedio de obstaculos dentro del radio.
-        Retorna (dx, dy) normalizado, o (0, 0) si no hay obstaculos."""
+        Retorna (dx, dy) normalizado, o (0, 0) si no hay obstaculos.
+        Si incluir_paredes=False, solo considera a otros robots."""
         gs = self.cfg.grid_size
         min_c = max(0, int((x - radius) // gs))
         max_c = min(self.cols - 1, int((x + radius) // gs))
@@ -269,19 +278,20 @@ class Mundo:
         count = 0
 
         # Paredes (solo con linea de vista)
-        for r in range(min_r, max_r + 1):
-            for c in range(min_c, max_c + 1):
-                if self.grid[r, c] == 0:
-                    continue
-                cx = c * gs + gs / 2
-                cy = r * gs + gs / 2
-                dx = x - cx
-                dy = y - cy
-                dist = math.hypot(dx, dy)
-                if dist < radius and dist > 0.1 and self.tiene_linea_de_vista(x, y, cx, cy):
-                    rep_dx += dx / dist
-                    rep_dy += dy / dist
-                    count += 1
+        if incluir_paredes:
+            for r in range(min_r, max_r + 1):
+                for c in range(min_c, max_c + 1):
+                    if self.grid[r, c] == 0:
+                        continue
+                    cx = c * gs + gs / 2
+                    cy = r * gs + gs / 2
+                    dx = x - cx
+                    dy = y - cy
+                    dist = math.hypot(dx, dy)
+                    if dist < radius and dist > 0.1 and self.tiene_linea_de_vista(x, y, cx, cy):
+                        rep_dx += dx / dist
+                        rep_dy += dy / dist
+                        count += 1
 
         # Otros robots
         for robot in self.robots:
