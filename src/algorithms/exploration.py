@@ -6,9 +6,12 @@ A Survey"): frontier-based (Yamauchi), sample-based / next-best-view y hybrid.
 
 La planificacion es centralizada y usa el mapa global combinado de todos los
 robots (mundo.explored): ningun robot conoce el mapa real total, solo lo que
-el enjambre ha ido descubriendo. La asignacion de tareas sigue el criterio
-simple de Yamauchi [22]: a cada frontera se le asigna el robot libre mas
-cercano, evitando exploracion redundante.
+el enjambre ha ido descubriendo. En Frontier Based y Hybrid la asignacion
+empareja por cercania (emparejamiento greedy minimo global): cada region de
+frontera se asigna al robot libre mas cercano y queda reservada en exclusiva
+hasta que el robot completa su objetivo; entonces se reasigna dinamicamente
+la siguiente region mas cercana. Sample Based conserva su asignacion por
+puntaje de ganancia de informacion.
 """
 
 import math
@@ -135,8 +138,9 @@ class FrontierBased:
         targets = []
         for region in regiones:
             x, y = _centroide(region, self.cfg.grid_size)
-            targets.append((x, y, float(len(region))))
-        targets.sort(key=lambda t: -t[2])
+            targets.append({"x": x, "y": y, "score": float(len(region)),
+                            "region": region})
+        targets.sort(key=lambda t: -t["score"])
         return targets
 
 
@@ -206,19 +210,21 @@ class Hybrid:
                 gain = _ganancia(mundo, x, y, radio)
                 costo = _costo_mas_cercano(mundo, x, y)
                 score = gain - self.cfg.sample_cost_weight * costo
-                if mejor is None or score > mejor[2]:
-                    mejor = (x, y, score)
+                if mejor is None or score > mejor["score"]:
+                    mejor = {"x": x, "y": y, "score": score, "region": region}
             if mejor is not None:
                 targets.append(mejor)
-        targets.sort(key=lambda t: -t[2])
+        targets.sort(key=lambda t: -t["score"])
         return targets[:self.cfg.sample_targets]
 
 
 class ExplorationPlanner:
     """Orquesta target generation + task allocation.
 
-    Cada plan_interval_s regenera los objetivos a partir del mapa global
-    combinado y asigna a cada frontera el robot libre mas cercano.
+    Cada plan_interval_s regenera las regiones de frontera a partir del mapa
+    global combinado. En Frontier Based y Hybrid se reserva cada region en
+    exclusiva para el robot asignado (emparejamiento por cercania) hasta que
+    completa su objetivo; Sample Based usa su asignacion por puntaje.
     """
 
     def __init__(self, cfg, method):
@@ -230,6 +236,8 @@ class ExplorationPlanner:
         else:
             self._generador = Hybrid(cfg)
         self._objetivos = []
+        self._regiones = []
+        self._reservas = {}
         self._ultima_generacion = -1e9
         self._no_go = {}
         self._alguna_vez_hubo_fronteras = False
@@ -261,21 +269,44 @@ class ExplorationPlanner:
                 r.goal = None
                 r.ruta = []
 
+        es_sample = isinstance(self._generador, SampleBased)
+
         if ahora - self._ultima_generacion >= self.cfg.plan_interval_s:
             generados = self._generador.generar(mundo)
             if generados:
                 self._alguna_vez_hubo_fronteras = True
+            self._ultima_generacion = ahora
+            if es_sample:
+                self._objetivos = [
+                    t for t in generados
+                    if self._celda_objetivo(t[0], t[1], gs) not in self._no_go
+                ]
+            else:
+                self._regiones = [
+                    t for t in generados
+                    if self._celda_objetivo(t["x"], t["y"], gs) not in self._no_go
+                ]
+                self._objetivos = [(t["x"], t["y"], t["score"]) for t in self._regiones]
+        elif es_sample:
             self._objetivos = [
-                t for t in generados
+                t for t in self._objetivos
                 if self._celda_objetivo(t[0], t[1], gs) not in self._no_go
             ]
-            self._ultima_generacion = ahora
-        if not self._objetivos:
-            return
-        self._objetivos = [
-            t for t in self._objetivos
-            if self._celda_objetivo(t[0], t[1], gs) not in self._no_go
-        ]
+        else:
+            self._regiones = [
+                t for t in self._regiones
+                if self._celda_objetivo(t["x"], t["y"], gs) not in self._no_go
+            ]
+            self._objetivos = [(t["x"], t["y"], t["score"]) for t in self._regiones]
+
+        if es_sample:
+            self._asignar_legacy(mundo)
+        else:
+            self._asignar_regiones(mundo, gs)
+
+    def _asignar_legacy(self, mundo):
+        """Asignacion original de Sample Based: objetivos por puntaje de
+        ganancia, robot libre mas cercano con preferencia de linea de vista."""
         if not self._objetivos:
             return
         libres = [r for r in mundo.robots if r.necesita_objetivo]
@@ -289,3 +320,54 @@ class ExplorationPlanner:
             libres.remove(mejor_robot)
             if not libres:
                 break
+
+    def _reservar_regiones(self, mundo, regiones, gs):
+        """Marca como reservadas las regiones cuyo centroide sigue cerca del
+        objetivo de cada robot ocupado. Devuelve el conjunto de regiones
+        reservadas y actualiza self._reservas (robot -> celda centroide)."""
+        radio = _radio_exploracion(mundo)
+        reservadas = set()
+        nuevas = {}
+        for idx, r in enumerate(mundo.robots):
+            if r.necesita_objetivo or r.goal is None:
+                continue
+            gx, gy = r.goal
+            mejor = None
+            for t in regiones:
+                if id(t) in reservadas:
+                    continue
+                d = math.hypot(gx - t["x"], gy - t["y"])
+                if d <= radio and (mejor is None or d < mejor[0]):
+                    mejor = (d, t)
+            if mejor is not None:
+                t = mejor[1]
+                reservadas.add(id(t))
+                nuevas[idx] = (int(t["y"] // gs), int(t["x"] // gs))
+        self._reservas = nuevas
+        return reservadas
+
+    def _asignar_regiones(self, mundo, gs):
+        """Emparejamiento greedy minimo global: en cada paso se asigna el par
+        (robot libre, region no reservada) de menor distancia. La region queda
+        reservada en exclusiva para el robot hasta que completa su objetivo."""
+        if not self._regiones:
+            return
+        reservadas = self._reservar_regiones(mundo, self._regiones, gs)
+        libres = [r for r in mundo.robots if r.necesita_objetivo]
+        if not libres:
+            return
+        disponibles = [t for t in self._regiones if id(t) not in reservadas]
+        while libres and disponibles:
+            mejor = None
+            for r in libres:
+                for t in disponibles:
+                    d = math.hypot(r.x - t["x"], r.y - t["y"])
+                    if mejor is None or d < mejor[0]:
+                        mejor = (d, r, t)
+            if mejor is None:
+                break
+            _, r, t = mejor
+            r.asignar_objetivo(t["x"], t["y"], mundo)
+            self._reservas[mundo.robots.index(r)] = (int(t["y"] // gs), int(t["x"] // gs))
+            libres.remove(r)
+            disponibles.remove(t)

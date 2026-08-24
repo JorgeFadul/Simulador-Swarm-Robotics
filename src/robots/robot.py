@@ -52,7 +52,26 @@ class Robot:
         self._ult_pos = (x, y)
         self._sin_avance = 0.0
 
-        self._elegir_nuevo_recorrido()
+        if self.cfg.strategy == "Random Walk":
+            self._elegir_nuevo_recorrido()
+        else:
+            self._esperar_objetivo()
+
+    def _esperar_objetivo(self):
+        """Detiene el robot a la espera de que el planificador le asigne una meta.
+
+        Filosofia propia de las estrategias dirigidas (Frontier/Sample/Hybrid):
+        al quedarse sin objetivo el robot no hace random walk, se queda quieto
+        hasta que el planificador le asigne la siguiente meta.
+        """
+        self.state = self.STOPPED
+        self.target_speed = 0.0
+        self.omega = 0.0
+        self.speed = 0.0
+        self.vx = 0.0
+        self.vy = 0.0
+        self.timer = 0.0
+        self.duration = 0.0
 
     def _elegir_nuevo_recorrido(self):
         self.target_angle = self.rng.uniform(0, 2 * math.pi)
@@ -212,32 +231,23 @@ class Robot:
                 self.state = self.MOVING
                 self._poner_en_marcha()
 
-    def _dirigir_hacia_objetivo(self, dt, mundo, rep_dx, rep_dy, has_obs):
+    def _dirigir_hacia_objetivo(self, dt, mundo, rep_dx, rep_dy, has_obs, colision_inminente):
+        """Movimiento dirigido continuo (tipo diferencial).
+
+        El robot avanza mientras gira hacia el siguiente waypoint de la ruta:
+        no hay duracion fija del tramo, ni abandono por timeout, ni la secuencia
+        de girar-total-y-luego-avanzar del random walk. La evitacion reactiva
+        mezcla la direccion al objetivo con el vector de repulsion para esquivar
+        paredes y otros robots sin detenerse.
+        """
         gx, gy = self.goal
-        self._goal_timer += dt
-
-        dxm = self.x - self._ult_pos[0]
-        dym = self.y - self._ult_pos[1]
-        if math.hypot(dxm, dym) < 5.0:
-            self._sin_avance += dt
-        else:
-            self._sin_avance = 0.0
-        self._ult_pos = (self.x, self.y)
-
-        if self._goal_timer > self.goal_timeout or self._sin_avance > 8.0:
-            self.goal_alcanzado = True
-            self.timed_out = True
-            self._frenar()
-            self.state = self.STOPPED
-            return
 
         if not self.ruta:
             self.ruta = encontrar_ruta(mundo, self.x, self.y, gx, gy)
             if not self.ruta:
                 self.goal_alcanzado = True
                 self.timed_out = True
-                self._frenar()
-                self.state = self.STOPPED
+                self._esperar_objetivo()
                 return
 
         tx, ty = self.ruta[0]
@@ -246,33 +256,53 @@ class Robot:
             self.ruta.pop(0)
             if not self.ruta:
                 self.goal_alcanzado = True
-                self._frenar()
-                self.state = self.STOPPED
+                self._esperar_objetivo()
                 return
             tx, ty = self.ruta[0]
 
         destino = math.atan2(ty - self.y, tx - self.x)
 
-        # Si lleva tiempo sin avanzar, desviarse con la repulsion para salir
-        # del atasco (paredes u otros robots).
-        if self._sin_avance > 1.0 and has_obs:
-            destino = math.atan2(rep_dy, rep_dx)
+        if colision_inminente and not has_obs:
+            destino = self.angle + math.radians(45)
+        elif has_obs:
+            # La repulsion solo desvia el rumbo si el obstaculo esta adelante
+            # (producto punto negativo con la direccion al destino). Si esta
+            # a un lado o detras, se mantiene el rumbo al objetivo.
+            gdx, gdy = math.cos(destino), math.sin(destino)
+            dot = gdx * rep_dx + gdy * rep_dy
+            if colision_inminente:
+                w = 0.0 if dot < 0.0 else self.cfg.dirigido_peso_evasion_imminente
+            elif dot < -0.15:
+                w = self.cfg.dirigido_peso_evasion_fuerte
+            elif dot < 0.3:
+                w = self.cfg.dirigido_peso_evasion_suave
+            else:
+                w = 1.0
+            destino = math.atan2(w * gdy + (1.0 - w) * rep_dy,
+                                 w * gdx + (1.0 - w) * rep_dx)
 
         diff = self._diferencia_angular(destino, self.angle)
-        if abs(diff) <= self.turn_threshold:
+        umbral = math.radians(self.cfg.dirigido_umbral_giro_deg)
+        if abs(diff) <= umbral:
+            self.omega = 0.0
             self.angle = destino
-            self.target_speed = self.max_speed
-            self.state = self.MOVING
-            self._poner_en_marcha()
         else:
-            direction = 1.0 if diff > 0 else -1.0
-            self.omega = direction * self.turn_speed
+            self.omega = math.copysign(self.turn_speed, diff)
             self.angle += self.omega * dt
             self.angle = math.atan2(math.sin(self.angle), math.cos(self.angle))
-            self.state = self.ROTATING
-            self.speed = 0.0
-            self.vx = 0.0
-            self.vy = 0.0
+
+        # Velocidad lineal escalada por el alineamiento con el destino: gira
+        # (pivotando si hace falta) mientras avanza, sin parar por completo.
+        # El factor minimo de avance (dirigido_avance_min) marca cuanto se
+        # avanza mientras se esta girando para alinearse.
+        alineado = max(0.0, math.cos(self._diferencia_angular(destino, self.angle)))
+        self.speed = self.max_speed * (self.cfg.dirigido_avance_min
+                                       + (1.0 - self.cfg.dirigido_avance_min) * alineado)
+        self.target_speed = self.speed
+        self.target_angle = destino
+        self.state = self.MOVING
+        self.vx = math.cos(self.angle) * self.speed
+        self.vy = math.sin(self.angle) * self.speed
 
     def update(self, dt: float, mundo: Mundo):
         rep_dx, rep_dy, has_obs = mundo.detectar_en_rango(
@@ -290,9 +320,11 @@ class Robot:
         hay_peligro = colision_inminente or has_obs
 
         if self.goal_mode and self.goal is not None and not self.goal_alcanzado:
-            self._dirigir_hacia_objetivo(dt, mundo, rep_dx, rep_dy, has_obs)
-        else:
+            self._dirigir_hacia_objetivo(dt, mundo, rep_dx, rep_dy, has_obs, colision_inminente)
+        elif self.cfg.strategy == "Random Walk":
             self._actualizar_random_walk(dt, hay_peligro, has_obs, rep_dx, rep_dy)
+        else:
+            self._esperar_objetivo()
 
         # Movimiento
         if self.state == self.MOVING and self.speed > 0:
@@ -311,12 +343,10 @@ class Robot:
                 self._explorar_propio_colision(mundo)
                 if self.goal_mode and self.goal is not None and not self.goal_alcanzado:
                     self.ruta = encontrar_ruta(mundo, self.x, self.y, self.goal[0], self.goal[1])
-                    if self.ruta:
-                        self._iniciar_giro(
-                            math.atan2(self.ruta[0][1] - self.y, self.ruta[0][0] - self.x)
-                        )
-                    else:
-                        self._iniciar_giro(self.angle + math.radians(45))
+                    if not self.ruta:
+                        self.goal_alcanzado = True
+                        self.timed_out = True
+                        self._esperar_objetivo()
                 else:
                     self._elegir_nuevo_recorrido()
             else:

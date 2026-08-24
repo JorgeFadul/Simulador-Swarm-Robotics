@@ -11,11 +11,12 @@ El sistema combina dos ventanas:
 
 - **Exploración SLAM por celda en tres niveles:** cada celda del mapa puede estar `SCOUTED` (avistada), `VISITED` (pisada por un robot) o `DISCOVERED` (es una pared que el robot ha visto o chocado).
 - **Sensado con línea de vista (LOS):** los sensores de los robots no atraviesan paredes. Una pared solo es `DISCOVERED` cuando un robot la ve o la choca físicamente (no se "adivina" la geometría).
-- **Exploración cooperativa multi-robot:** el planificador global genera objetivos desde el mapa combinado y los reparte entre los robots libres (generación de objetivos + asignación de tareas).
+- **Exploración cooperativa multi-robot:** el planificador global genera objetivos desde el mapa combinado y los reparte entre los robots libres, reservando cada región de frontera en exclusiva para el robot que la trabaja (generación de objetivos + asignación de tareas por cercanía).
 - **Estrategias de exploración:** *Frontier Based* (Yamauchi), *Sample Based* (next-best-view por muestreo) e *Hybrid* (mejor punto de vista por región de frontera), además del *Random Walk*.
 - **Motion planning (A\*):** cada objetivo se planifica como una ruta de celdas sobre el mapa libre; las celdas exploradas tienen costo bajo y las desconocidas costo alto (se cruzan de forma optimista si es necesario).
-- **Robots como máquina de estados:** `STOPPED`, `ROTATING` y `MOVING`, con velocidad de giro limitada y detección de colisión frontal (obstáculos y otros robots).
-- **Evitación reactiva de obstáculos:** vector de alejamiento promedio sobre obstáculos visibles dentro del radio de detección; en modo dirigido se usa para salir de atascos sin abandonar el objetivo.
+- **Movimiento por máquina de estados (solo Random Walk):** `STOPPED`, `ROTATING` y `MOVING`, con velocidad de giro limitada y detección de colisión frontal (obstáculos y otros robots).
+- **Movimiento dirigido continuo (tipo diferencial):** al perseguir un objetivo (Frontier/Sample/Hybrid) el robot avanza mientras gira hacia el siguiente waypoint, sin tramos de duración fija, sin abandono por timeout ni la secuencia de girar-total-y-luego-avanzar del random walk.
+- **Evitación reactiva de obstáculos:** vector de alejamiento promedio sobre obstáculos visibles dentro del radio de detección; en modo dirigido se combina con el rumbo al objetivo solo cuando el obstáculo está adelante, sin detener el avance ni renunciar a la meta.
 - **Exploración individual y global:** cada robot mantiene su propio mapa `explored_robot`, y el mapa global agrega todas las percepciones. Los objetivos se generan solo a partir del mapa descubierto (ningún robot conoce el mapa total).
 - **Visualización de la intención de movimiento:** línea punteada cian con punta de flecha que indica hacia dónde y cuánto avanzará el robot según su plan actual.
 - **Capas de planificación configurables:** las casillas de la pestaña Controles permiten mostrar u ocultar por separado la máscara de fronteras, los objetivos asignados y la línea de intención, sin detener la simulación.
@@ -75,7 +76,8 @@ Se abren las dos ventanas. Para salir, cierra la ventana de Pygame o presiona la
 - **Individual:** selecciona un robot del desplegable; muestra un gráfico de barras con sus métricas (celdas exploradas, visitadas, paredes vistas) y su mini-mapa de exploración.
 - **Cobertura:** vista general de la cobertura de exploración.
 - **Global:** tiempo simulado, FPS, pasos totales, porcentajes de cobertura y cantidad de robots.
-- **Controles:** herramientas, tamaño de grilla, población (botón "Poblar" agrega robots en posiciones libres), parámetros editables del robot, selección de estrategia, casillas para mostrar/ocultar capas de planificación (fronteras, objetivos e intención), botones de simular/pausar/detener y guardar/cargar configuración.
+- **Controles:** herramientas, tamaño de grilla, población (botón "Poblar" agrega robots en posiciones libres), parámetros editables del robot, casillas para mostrar/ocultar capas de planificación (fronteras, objetivos e intención), botones de simular/pausar/detener y guardar/cargar configuración.
+- **Estrategias:** selector de estrategia (Random Walk, Frontier Based, Sample Based, Hybrid) y todos los parámetros de los generadores de objetivos (meta de descubrimiento, intervalo de planificación, radio de llegada, timeout de objetivo, tamaño mínimo de frontera y parámetros de muestreo) junto con los parámetros del movimiento dirigido (avance mínimo al girar, pesos de la evitación reactiva y umbral de giro), aplicables en caliente y guardables en `sim_config.txt`.
 
 ## Configuración
 
@@ -96,12 +98,17 @@ Formato `clave=valor`, una por línea. Se escribe con el botón "Guardar config"
 | `exploration_goal`                | (0-1)       | Fracción del mapa que debe descubrirse para completar la simulación |
 | `plan_interval_s`                 | s           | Intervalo de regeneración de objetivos y asignación de tareas |
 | `goal_reached_radius_px`          | px          | Radio de llegada para considerar alcanzado un objetivo |
-| `goal_timeout_s`                  | s           | Tiempo mínimo antes de descartar un objetivo (se amplía según la longitud de la ruta) |
+| `goal_timeout_s`                  | s           | Duración del `no_go`: cuánto se bloquea una celda objetivo inalcanzable antes de volver a proponerla |
 | `frontier_min_size`               | celdas      | Tamaño mínimo de una región de frontera para generar un objetivo |
 | `sample_candidates`               | -           | Candidatos muestreados por el generador *Sample Based* |
 | `sample_per_cluster`              | -           | Puntos de vista muestreados por región en *Hybrid* |
 | `sample_cost_weight`              | (adim)      | Peso del costo (distancia) en la función de puntaje |
 | `sample_targets`                  | -           | Máximo de objetivos devueltos por los generadores basados en muestreo |
+| `dirigido_avance_min`             | (adim)      | Fracción mínima de velocidad lineal mientras el robot gira para alinearse con el destino (movimiento dirigido) |
+| `dirigido_peso_evasion_imminente` | (adim)      | Peso del rumbo al objetivo cuando hay colisión inminente con un obstáculo al frente (dirigido) |
+| `dirigido_peso_evasion_fuerte`    | (adim)      | Peso del rumbo al objetivo cuando un obstáculo está claramente al frente (dirigido) |
+| `dirigido_peso_evasion_suave`     | (adim)      | Peso del rumbo al objetivo cuando un obstáculo está algo al frente (dirigido) |
+| `dirigido_umbral_giro_deg`        | grados      | Umbral de alineación con el waypoint para considerar terminado el giro (dirigido) |
 
 Las distancias físicas (cm) se convierten a píxeles según `pixels_per_cm`. Si el archivo no existe, falta o un valor no es numérico, se ignora y se conservan los valores por defecto.
 
@@ -157,7 +164,10 @@ simulador-swarm-2d/
 
 ### Robot y movimiento
 
-La máquina de estados (`STOPPED` -> `ROTATING` -> `MOVING`) rota hacia el ángulo objetivo a velocidad limitada y luego avanza a velocidad crucero con aceleración suave. El temporizador de cada tramo (`timer`) **solo avanza mientras el robot está en `MOVING`**, por lo que el tiempo de giro no reduce la duración del movimiento planificado.
+Dos modos de movimiento:
+
+- **Random Walk:** la máquina de estados (`STOPPED` -> `ROTATING` -> `MOVING`) rota hacia el ángulo objetivo a velocidad limitada y luego avanza a velocidad crucero con aceleración suave. El temporizador de cada tramo (`timer`) **solo avanza mientras el robot está en `MOVING`**, por lo que el tiempo de giro no reduce la duración del movimiento planificado.
+- **Movimiento dirigido (objetivos del planificador):** es continuo y tipo diferencial: el robot gira hacia el siguiente waypoint a velocidad de giro limitada **mientras avanza** (la velocidad lineal se escala con el alineamiento, pivotando si hace falta), sin tramos con duración fija, sin abandono por timeout ni límite de avance. La evitación reactiva desvía el rumbo solo cuando hay un obstáculo al frente (mezclando la dirección al objetivo con el vector de repulsión) y, si el robot choca físicamente, descubre la pared y replanifica la ruta. No se aplica ninguna de las restricciones del random walk (ni de tiempo, ni de choques —aunque se evitan colisiones con paredes y otros robots—, ni girar-total-antes-de-avanzar, ni el avance acotado). Si un robot se queda sin objetivo (lo alcanzó, es inalcanzable o colisionó sin ruta alternativa), se **detiene y espera** a que el planificador le asigne la siguiente meta: no recurre al random walk. Los parámetros de este movimiento (avance mínimo al girar, pesos de la evitación reactiva y umbral de giro) se ajustan en la pestaña Estrategias.
 
 ## Exploración cooperativa
 
@@ -168,8 +178,11 @@ El esquema de planificación sigue tres etapas (generación de objetivos, asigna
    - `SampleBased`: muestrea candidatos aleatorios (NBV) y los puntúa por ganancia de área desconocida visible menos costo, quedándose con los mejores.
    - `Hybrid`: muestrea varios puntos de vista por región de frontera y conserva el mejor de cada una (Charrow et al.).
    - `Random Walk`: sin planificador; cada robot se mueve aleatoriamente.
-2. **Asignación de tareas** (`ExplorationPlanner`). Cada `plan_interval_s` se regeneran los objetivos y se asignan a los robots libres, prefiriendo los que tienen línea de vista al objetivo y, en igualdad, el más cercano. Los objetivos inalcanzables o abandonados por timeout se marcan como `no_go` temporalmente para repartir a los robots.
-3. **Motion planning** (`src/algorithms/pathfinding.py`). Cada objetivo asignado se planifica con A* sobre el grid: las celdas libres exploradas tienen costo 1, las libres desconocidas costo 6 (se atraviesan de forma optimista si hace falta) y las paredes son intransitables. El robot sigue los waypoints y, si queda atascado (pared u otro robot), se desvía con el vector de repulsión y replanifica al recuperar el contacto.
+2. **Asignación de tareas** (`ExplorationPlanner`). Cada `plan_interval_s` se regeneran las regiones de frontera:
+   - `Frontier Based` y `Hybrid`: **emparejamiento por cercanía con reserva exclusiva**. En cada ciclo se busca el par (robot libre, región no reservada) de menor distancia (emparejamiento greedy mínimo global), de modo que la frontera más cercana se asigne siempre al robot más cercano. La región queda **reservada** para ese robot hasta que completa su objetivo; al terminarlo (o por timeout), la región vuelve a estar disponible y se reasigna dinámicamente la siguiente región más cercana. No se usa preferencia de línea de vista.
+   - `Sample Based`: conserva su asignación por puntaje de ganancia, eligiendo el robot libre más cercano (con preferencia de línea de vista).
+   - Los objetivos inalcanzables (sin ruta A*) se marcan como `no_go` temporalmente para repartir a los robots.
+3. **Motion planning** (`src/algorithms/pathfinding.py`). Cada objetivo asignado se planifica con A* sobre el grid: las celdas libres exploradas tienen costo 1, las libres desconocidas costo 6 (se atraviesan de forma optimista si hace falta) y las paredes son intransitables. El robot sigue los waypoints con movimiento continuo tipo diferencial y, si hay un obstáculo al frente, desvía el rumbo con el vector de repulsión; si choca físicamente, descubre la pared y replanifica. Sin objetivo asignado, el robot se detiene y espera al planificador (no recurre al random walk).
 
 La simulación termina cuando el mapa combinado alcanza la fracción `exploration_goal` o cuando no quedan celdas de frontera (no se exige visitar todas las celdas, solo descubrir el mapa).
 
@@ -177,8 +190,8 @@ La simulación termina cuando el mapa combinado alcanza la fracción `exploratio
 
 Cada robot expone su plan actual:
 
-- `intent_tiempo_restante = max(0, duration - timer)`
-- `intent_distancia = target_speed * intent_tiempo_restante`
+- En modo random walk: `intent_tiempo_restante = max(0, duration - timer)` y `intent_distancia = target_speed * intent_tiempo_restante`.
+- En modo dirigido: el tiempo restante y la distancia se estiman hasta el siguiente waypoint de la ruta (`distancia al waypoint / velocidad actual`).
 
 El renderizador dibuja una línea punteada cian con punta de flecha en la dirección de `target_angle`, con longitud acotada a la `intent_distancia`, limitada a 260 px y detenida en la primera pared `DISCOVERED`. Se dibuja debajo de los robots para que estos queden siempre visibles.
 

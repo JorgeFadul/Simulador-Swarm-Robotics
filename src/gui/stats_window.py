@@ -18,6 +18,20 @@ _PARAM_LABELS = {
     "exploration_radius_multiplier": "Multipl. exploracion",
     "random_walk_interval_min": "Walk min (s)",
     "random_walk_interval_max": "Walk max (s)",
+    "exploration_goal": "Meta descubrimiento",
+    "plan_interval_s": "Intervalo plan (s)",
+    "goal_reached_radius_px": "Radio llegada (px)",
+    "goal_timeout_s": "Timeout objetivo (s)",
+    "frontier_min_size": "Frontera min (celdas)",
+    "sample_candidates": "Candidatos muestreo",
+    "sample_per_cluster": "Puntos por region",
+    "sample_cost_weight": "Peso del costo",
+    "sample_targets": "Max objetivos",
+    "dirigido_avance_min": "Avance min al girar",
+    "dirigido_peso_evasion_imminente": "Peso evasion inminente",
+    "dirigido_peso_evasion_fuerte": "Peso evasion fuerte",
+    "dirigido_peso_evasion_suave": "Peso evasion suave",
+    "dirigido_umbral_giro_deg": "Umbral giro (deg)",
 }
 
 
@@ -50,6 +64,10 @@ class StatsWindow:
         frame_ctrl = ttk.Frame(notebook)
         notebook.add(frame_ctrl, text="Controles")
         self._build_controls_tab(frame_ctrl)
+
+        frame_estr = ttk.Frame(notebook)
+        notebook.add(frame_estr, text="Estrategias")
+        self._build_strategy_tab(frame_estr)
 
         self._img_tk = None
         self._img_robot_tk = None
@@ -149,15 +167,6 @@ class StatsWindow:
             ["random_walk_interval_min", "random_walk_interval_max"])
 
         ttk.Separator(f, orient="horizontal").pack(fill="x", pady=8)
-        ttk.Label(f, text="Estrategia:", font=("Arial", 10, "bold")).pack(anchor="w")
-        self.strategy_var = tk.StringVar(value=self.sim.cfg.strategy)
-        strat_frame = ttk.Frame(f)
-        strat_frame.pack(fill="x", pady=4)
-        ttk.Combobox(strat_frame, textvariable=self.strategy_var,
-                      values=["Random Walk", "Frontier Based", "Sample Based", "Hybrid"],
-                      state="readonly", width=30).pack(side="left")
-
-        ttk.Separator(f, orient="horizontal").pack(fill="x", pady=8)
         ttk.Label(f, text="Visualizacion de planificacion:",
                   font=("Arial", 10, "bold")).pack(anchor="w")
         vis_frame = ttk.Frame(f)
@@ -203,6 +212,72 @@ class StatsWindow:
 
         self._sync_params_from_cfg()
 
+    def _build_strategy_tab(self, parent):
+        outer = ttk.Frame(parent)
+        outer.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(outer, borderwidth=0, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        scroll_frame = ttk.Frame(canvas)
+
+        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind("<MouseWheel>", _on_mousewheel)
+
+        f = ttk.Frame(scroll_frame, padding=12)
+        f.pack(fill="both", expand=True)
+
+        ttk.Label(f, text="Estrategia de exploracion:", font=("Arial", 10, "bold")).pack(anchor="w")
+        self.strategy_var = tk.StringVar(value=self.sim.cfg.strategy)
+        strat_frame = ttk.Frame(f)
+        strat_frame.pack(fill="x", pady=4)
+        self.strategy_combo = ttk.Combobox(strat_frame, textvariable=self.strategy_var,
+                      values=["Random Walk", "Frontier Based", "Sample Based", "Hybrid"],
+                      state="readonly", width=30)
+        self.strategy_combo.pack(side="left")
+        self.strategy_combo.bind("<<ComboboxSelected>>", self._cambiar_estrategia)
+
+        ttk.Separator(f, orient="horizontal").pack(fill="x", pady=8)
+        ttk.Label(f, text="Los parametros se aplican a las estrategias que usan "
+                          "planificador (Frontier, Sample e Hybrid).",
+                  font=("Arial", 8)).pack(anchor="w", pady=(0, 4))
+
+        self._build_param_section(f, "Objetivo global",
+            ["exploration_goal"])
+        self._build_param_section(f, "Planificacion",
+            ["plan_interval_s", "goal_reached_radius_px", "goal_timeout_s"])
+        self._build_param_section(f, "Fronteras (Frontier / Hybrid)",
+            ["frontier_min_size"])
+        self._build_param_section(f, "Muestreo (Sample / Hybrid)",
+            ["sample_candidates", "sample_per_cluster", "sample_cost_weight", "sample_targets"])
+        self._build_param_section(f, "Movimiento dirigido (Frontier / Sample / Hybrid)",
+            ["dirigido_avance_min", "dirigido_umbral_giro_deg"])
+        self._build_param_section(f, "Evitacion reactiva (dirigido)",
+            ["dirigido_peso_evasion_imminente",
+             "dirigido_peso_evasion_fuerte",
+             "dirigido_peso_evasion_suave"])
+
+        ttk.Separator(f, orient="horizontal").pack(fill="x", pady=8)
+        ttk.Label(f, text="El Random Walk solo usa los intervalos de la pestaña "
+                          "Controles.", font=("Arial", 8)).pack(anchor="w")
+        ttk.Label(f, text="En estrategias dirigidas, un robot sin objetivo "
+                          "asignado se detiene y espera al planificador "
+                          "(no hace random walk).", font=("Arial", 8)).pack(anchor="w")
+
+        self._sync_params_from_cfg()
+
+    def _cambiar_estrategia(self, *_):
+        self.sim.cfg.strategy = self.strategy_var.get()
+        if self.sim.estado == "running":
+            self.sim.planner = self.sim._crear_planner()
+
     def _build_param_section(self, parent, title, keys):
         ttk.Separator(parent, orient="horizontal").pack(fill="x", pady=8)
         ttk.Label(parent, text=title + ":", font=("Arial", 10, "bold")).pack(anchor="w")
@@ -242,6 +317,34 @@ class StatsWindow:
             cfg.random_walk_interval_min = val
         elif key == "random_walk_interval_max":
             cfg.random_walk_interval_max = val
+        elif key == "exploration_goal":
+            cfg.exploration_goal = val
+        elif key == "plan_interval_s":
+            cfg.plan_interval_s = val
+        elif key == "goal_reached_radius_px":
+            cfg.goal_reached_radius_px = val
+        elif key == "goal_timeout_s":
+            cfg.goal_timeout_s = val
+        elif key == "frontier_min_size":
+            cfg.frontier_min_size = int(val)
+        elif key == "sample_candidates":
+            cfg.sample_candidates = int(val)
+        elif key == "sample_per_cluster":
+            cfg.sample_per_cluster = int(val)
+        elif key == "sample_cost_weight":
+            cfg.sample_cost_weight = val
+        elif key == "sample_targets":
+            cfg.sample_targets = int(val)
+        elif key == "dirigido_avance_min":
+            cfg.dirigido_avance_min = val
+        elif key == "dirigido_peso_evasion_imminente":
+            cfg.dirigido_peso_evasion_imminente = val
+        elif key == "dirigido_peso_evasion_fuerte":
+            cfg.dirigido_peso_evasion_fuerte = val
+        elif key == "dirigido_peso_evasion_suave":
+            cfg.dirigido_peso_evasion_suave = val
+        elif key == "dirigido_umbral_giro_deg":
+            cfg.dirigido_umbral_giro_deg = val
 
     def _sync_params_from_cfg(self):
         cfg = self.sim.cfg
@@ -253,6 +356,20 @@ class StatsWindow:
             "exploration_radius_multiplier": str(cfg.exploration_radius_multiplier),
             "random_walk_interval_min": str(cfg.random_walk_interval_min),
             "random_walk_interval_max": str(cfg.random_walk_interval_max),
+            "exploration_goal": str(cfg.exploration_goal),
+            "plan_interval_s": str(cfg.plan_interval_s),
+            "goal_reached_radius_px": str(cfg.goal_reached_radius_px),
+            "goal_timeout_s": str(cfg.goal_timeout_s),
+            "frontier_min_size": str(cfg.frontier_min_size),
+            "sample_candidates": str(cfg.sample_candidates),
+            "sample_per_cluster": str(cfg.sample_per_cluster),
+            "sample_cost_weight": str(cfg.sample_cost_weight),
+            "sample_targets": str(cfg.sample_targets),
+            "dirigido_avance_min": str(cfg.dirigido_avance_min),
+            "dirigido_peso_evasion_imminente": str(cfg.dirigido_peso_evasion_imminente),
+            "dirigido_peso_evasion_fuerte": str(cfg.dirigido_peso_evasion_fuerte),
+            "dirigido_peso_evasion_suave": str(cfg.dirigido_peso_evasion_suave),
+            "dirigido_umbral_giro_deg": str(cfg.dirigido_umbral_giro_deg),
         }
         for key, val in mapping.items():
             if key in self._param_vars:
@@ -270,6 +387,20 @@ class StatsWindow:
                 f"exploration_radius_multiplier={cfg.exploration_radius_multiplier}",
                 f"random_walk_interval_min={cfg.random_walk_interval_min}",
                 f"random_walk_interval_max={cfg.random_walk_interval_max}",
+                f"exploration_goal={cfg.exploration_goal}",
+                f"plan_interval_s={cfg.plan_interval_s}",
+                f"goal_reached_radius_px={cfg.goal_reached_radius_px}",
+                f"goal_timeout_s={cfg.goal_timeout_s}",
+                f"frontier_min_size={cfg.frontier_min_size}",
+                f"sample_candidates={cfg.sample_candidates}",
+                f"sample_per_cluster={cfg.sample_per_cluster}",
+                f"sample_cost_weight={cfg.sample_cost_weight}",
+                f"sample_targets={cfg.sample_targets}",
+                f"dirigido_avance_min={cfg.dirigido_avance_min}",
+                f"dirigido_peso_evasion_imminente={cfg.dirigido_peso_evasion_imminente}",
+                f"dirigido_peso_evasion_fuerte={cfg.dirigido_peso_evasion_fuerte}",
+                f"dirigido_peso_evasion_suave={cfg.dirigido_peso_evasion_suave}",
+                f"dirigido_umbral_giro_deg={cfg.dirigido_umbral_giro_deg}",
                 f"strategy={self.strategy_var.get()}",
             ]
             with open(params_path, "w") as f:
@@ -293,6 +424,9 @@ class StatsWindow:
                     var.set(data[key])
             if "strategy" in data:
                 self.strategy_var.set(data["strategy"])
+            self.sim.cfg.strategy = self.strategy_var.get()
+            if self.sim.estado == "running":
+                self.sim.planner = self.sim._crear_planner()
             self.config_msg.config(text=f"Cargado desde {params_path}", foreground="#8f8")
         except FileNotFoundError:
             self.config_msg.config(text=f"No encontrado: {params_path}", foreground="#f88")

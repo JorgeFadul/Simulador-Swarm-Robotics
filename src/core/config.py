@@ -44,6 +44,12 @@ class Config:
         self.sample_cost_weight: float = float(raw.get("sample_cost_weight", 0.02))
         self.sample_targets: int = int(raw.get("sample_targets", 12))
 
+        self.dirigido_avance_min: float = float(raw.get("dirigido_avance_min", 0.45))
+        self.dirigido_peso_evasion_imminente: float = float(raw.get("dirigido_peso_evasion_imminente", 0.5))
+        self.dirigido_peso_evasion_fuerte: float = float(raw.get("dirigido_peso_evasion_fuerte", 0.4))
+        self.dirigido_peso_evasion_suave: float = float(raw.get("dirigido_peso_evasion_suave", 0.8))
+        self.dirigido_umbral_giro_deg: float = float(raw.get("dirigido_umbral_giro_deg", 5.0))
+
         self.walls: list[dict] = raw.get("walls", [])
 
         self.cols = self.map_width // self.grid_size
@@ -68,10 +74,26 @@ class Config:
         for key in ("robot_radius_cm", "robot_max_speed_cm_s",
                     "robot_turn_speed_rad_s", "detection_radius_cm",
                     "exploration_radius_multiplier",
-                    "random_walk_interval_min", "random_walk_interval_max"):
+                    "random_walk_interval_min", "random_walk_interval_max",
+                    "exploration_goal", "plan_interval_s",
+                    "goal_reached_radius_px", "goal_timeout_s",
+                    "sample_cost_weight",
+                    "dirigido_avance_min",
+                    "dirigido_peso_evasion_imminente",
+                    "dirigido_peso_evasion_fuerte",
+                    "dirigido_peso_evasion_suave",
+                    "dirigido_umbral_giro_deg"):
             if key in data:
                 try:
                     setattr(self, key, float(data[key]))
+                except ValueError:
+                    continue
+
+        for key in ("frontier_min_size", "sample_candidates",
+                    "sample_per_cluster", "sample_targets"):
+            if key in data:
+                try:
+                    setattr(self, key, int(data[key]))
                 except ValueError:
                     continue
 
