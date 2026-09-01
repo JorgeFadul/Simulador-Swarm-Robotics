@@ -18,7 +18,7 @@ import math
 
 import numpy as np
 
-from ..core.mundo import Mundo
+from ..core.mundo import DISCOVERED, Mundo
 
 _RNG = np.random.default_rng()
 
@@ -99,12 +99,12 @@ def _costo_mas_cercano(mundo, x, y):
     return costo if costo is not None else 0.0
 
 
-def _muestrear_en_zona(mundo, cx0, cy0, radio):
+def _muestrear_en_zona(mundo, cx0, cy0, radio, rng):
     """Devuelve una posicion explorada y libre dentro de radio de (cx0, cy0)."""
     gs = mundo.cfg.grid_size
     for _ in range(30):
-        ang = _RNG.uniform(0, 2 * math.pi)
-        d = _RNG.uniform(0, radio * 0.8)
+        ang = rng.uniform(0, 2 * math.pi)
+        d = rng.uniform(0, radio * 0.8)
         x = cx0 + math.cos(ang) * d
         y = cy0 + math.sin(ang) * d
         c = int(x // gs)
@@ -119,6 +119,168 @@ def _muestrear_en_zona(mundo, cx0, cy0, radio):
     return None
 
 
+def _paso_barrido(mundo):
+    """Separacion entre lineas de barrido del Boustrophedon: una pasada debe
+    avanzar al menos un radio de deteccion para no dejar huecos entre fajas."""
+    return max(mundo.cfg.detection_radius_px, mundo.cfg.grid_size)
+
+
+def _pared_conocida(mundo, r, c):
+    """True si la celda es una pared que el enjambre YA ha descubierto (LOS o
+    choque). Las paredes aun no vistas no se conocen (restriccion de ceguera del
+    Boustrophedon: el patron solo conoce las 4 esquinas del rectangulo exterior)."""
+    return mundo.grid[r, c] == 1 and mundo.explored[r, c] == DISCOVERED
+
+
+def _tramos_barrido(mundo, fila, direccion):
+    """Tramos conexos de celdas libres a lo largo de la fila horizontal `fila`,
+    recorrida en `direccion` (1 derecha, -1 izquierda). Cada pared CONOCIDA
+    parte el tramo: es la adaptacion dinamica que bordea paredes internas que
+    un barrido ciego (solo 4 esquinas) no preveia. Devuelve lista de listas de
+    (r, c) en orden de recorrido."""
+    cols = (range(mundo.cols) if direccion > 0
+            else range(mundo.cols - 1, -1, -1))
+    tramos = []
+    actual = []
+    for c in cols:
+        if mundo.grid[fila, c] == 0 and not _pared_conocida(mundo, fila, c):
+            actual.append((fila, c))
+        else:
+            if actual:
+                tramos.append(actual)
+                actual = []
+    if actual:
+        tramos.append(actual)
+    return tramos
+
+
+def _waypoints_tramo(mundo, tramo, direccion, paso):
+    """Subdivide un tramo de barrido en waypoints espaciados `paso` px a lo largo
+    de su recorrido. Con un waypoint cada `paso` el zigzag es denso y el robot
+    recorre la linea por segmentos en vez de saltar directo al extremo. El tramo
+    ya viene ordenado segun la direccion de la pasada. Cada waypoint es una
+    region asignable (celda individual)."""
+    gs = mundo.cfg.grid_size
+    puntos = []
+    ultimo_x = None
+    for r, c in tramo:
+        x = c * gs + gs / 2
+        if ultimo_x is None or (x - ultimo_x) >= paso:
+            puntos.append({"x": x, "y": r * gs + gs / 2, "score": 1.0,
+                           "region": [(r, c)]})
+            ultimo_x = x
+    return puntos
+
+
+class Boustrophedon:
+    """Barrido en zigzag (boustrophedon) del mapa.
+
+    Bajo la restriccion de ceguera el patron se genera sobre el RECTANGULO
+    exterior conocido (las 4 esquinas del mapa), sin pre-conocer las paredes
+    internas. El barrido alterna la direccion de cada fila horizontal (izq -> der,
+    der -> izq). Cuando el enjambre descubre una pared interna por linea de vista
+    o choque (`_pared_conocida`), la fila se parte en tramos y la pasada lo
+    bordea: es el recalculo dinamico que el enunciado pide.
+
+    1E-H: se usa como exploracion e inspecciona al visitar.
+    2E:   se usa como exploracion; la inspeccion la gestiona InspectionPlanner.
+    """
+
+    nombre = "Boustrophedon"
+
+    def __init__(self, cfg, rng=None):
+        self.cfg = cfg
+        self.rng = rng or np.random.default_rng()
+        self.mask = None
+
+    def generar(self, mundo):
+        self.mask = _celdas_frontera(mundo)
+        gs = mundo.cfg.grid_size
+        paso = _paso_barrido(mundo)
+        direccion = 1
+        objetivos = []
+        y = paso / 2
+        while y < mundo.cfg.map_height:
+            fila = int(y // gs)
+            tramos = _tramos_barrido(mundo, fila, direccion)
+            for t in tramos:
+                objetivos.extend(_waypoints_tramo(mundo, t, direccion, paso))
+            y += paso
+            direccion = -direccion
+        # Se conserva el ORDEN ESPACIAL del zigzag (fila a fila, alternando
+        # direccion) y se recorta a un tope para no generar miles de objetivos;
+        # la asignacion por cercania los reparte a los robots en ese orden.
+        tope = max(self.cfg.sample_targets, len(mundo.robots) * 8)
+        return objetivos[:tope]
+
+
+class VoronoiExploracion:
+    """Voronoi + Boustrophedon + Hybrid Frontier (1E-H).
+
+    El mapa DESCUBIERTO y libre se particiona con un Diagrama de Voronoi discreto:
+    cada celda libre conocida se asigna al sitio (posicion de un robot) mas
+    cercano. Cada robot recibe su region en exclusiva y, dentro de ella, el
+    objetivo es la mejor celda de frontera por ganancia menos costo (Hybrid
+    Frontier dentro de la region). Cuando una region queda cubierta o bloqueada
+    por una pared nueva, el sensor de frontera deja de reportar celdas en ella y
+    el planificador recalcula los centroides y emite una nueva particion
+    (recalculo dinamico de la Fase 2).
+    """
+
+    nombre = "Voronoi"
+
+    def __init__(self, cfg, rng=None):
+        self.cfg = cfg
+        self.rng = rng or np.random.default_rng()
+        self.mask = None
+
+    def _particion(self, mundo):
+        """Devuelve una lista de regiones (una por robot), cada una con sus celdas."""
+        gs = mundo.cfg.grid_size
+        robots = mundo.robots
+        if not robots:
+            return []
+        sitios = [(r.x, r.y) for r in robots]
+        regiones = [{"sitio": s, "celdas": [], "robot": k}
+                    for k, s in enumerate(sitios)]
+        libre = mundo.grid == 0
+        conocido = mundo.explored != 0
+        celdas = np.argwhere(libre & conocido)
+        for r_i, c_i in celdas:
+            gx = c_i * gs + gs / 2
+            gy = r_i * gs + gs / 2
+            mejor = min(range(len(sitios)),
+                        key=lambda k: (sitios[k][0] - gx) ** 2 + (sitios[k][1] - gy) ** 2)
+            regiones[mejor]["celdas"].append((int(r_i), int(c_i)))
+        return regiones
+
+    def generar(self, mundo):
+        self.mask = _celdas_frontera(mundo)
+        gs = mundo.cfg.grid_size
+        radio = _radio_exploracion(mundo)
+        regiones = self._particion(mundo)
+        objetivos = []
+        for reg in regiones:
+            if not reg["celdas"]:
+                continue
+            mejor = None
+            for r_i, c_i in reg["celdas"]:
+                if not self.mask[r_i, c_i]:
+                    continue
+                x = c_i * gs + gs / 2
+                y = r_i * gs + gs / 2
+                gain = _ganancia(mundo, x, y, radio)
+                costo = math.hypot(reg["sitio"][0] - x, reg["sitio"][1] - y)
+                score = gain - self.cfg.sample_cost_weight * costo
+                if mejor is None or score > mejor["score"]:
+                    mejor = {"x": x, "y": y, "score": score,
+                             "region": reg["celdas"], "robot": reg["robot"]}
+            if mejor is not None:
+                objetivos.append(mejor)
+        objetivos.sort(key=lambda t: -t["score"])
+        return objetivos
+
+
 class FrontierBased:
     """Fronteras = celdas libres conocidas adyacentes a lo desconocido.
 
@@ -128,8 +290,9 @@ class FrontierBased:
 
     nombre = "Frontier Based"
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, rng=None):
         self.cfg = cfg
+        self.rng = rng or np.random.default_rng()
         self.mask = None
 
     def generar(self, mundo):
@@ -151,8 +314,9 @@ class SampleBased:
 
     nombre = "Sample Based"
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, rng=None):
         self.cfg = cfg
+        self.rng = rng or np.random.default_rng()
         self.mask = None
 
     def generar(self, mundo):
@@ -165,10 +329,10 @@ class SampleBased:
         candidatos = []
         n = self.cfg.sample_candidates
         for _ in range(n):
-            r0, c0 = idx[_RNG.integers(len(idx))]
+            r0, c0 = idx[self.rng.integers(len(idx))]
             cx0 = c0 * gs + gs / 2
             cy0 = r0 * gs + gs / 2
-            punto = _muestrear_en_zona(mundo, cx0, cy0, radio)
+            punto = _muestrear_en_zona(mundo, cx0, cy0, radio, self.rng)
             if punto is None:
                 continue
             x, y = punto
@@ -185,10 +349,11 @@ class Hybrid:
     de vista por region, quedandose con el mejor de cada una (Charrow [86]).
     """
 
-    nombre = "Hybrid"
+    nombre = "Hybrid Based"
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, rng=None):
         self.cfg = cfg
+        self.rng = rng or np.random.default_rng()
         self.mask = None
 
     def generar(self, mundo):
@@ -200,10 +365,10 @@ class Hybrid:
         for region in regiones:
             mejor = None
             for _ in range(self.cfg.sample_per_cluster):
-                r0, c0 = region[_RNG.integers(len(region))]
+                r0, c0 = region[self.rng.integers(len(region))]
                 cx0 = c0 * gs + gs / 2
                 cy0 = r0 * gs + gs / 2
-                punto = _muestrear_en_zona(mundo, cx0, cy0, radio)
+                punto = _muestrear_en_zona(mundo, cx0, cy0, radio, self.rng)
                 if punto is None:
                     continue
                 x, y = punto
@@ -227,14 +392,19 @@ class ExplorationPlanner:
     completa su objetivo; Sample Based usa su asignacion por puntaje.
     """
 
-    def __init__(self, cfg, method):
+    def __init__(self, cfg, method, rng=None):
         self.cfg = cfg
+        self._rng = rng or np.random.default_rng()
         if method == "Frontier Based":
-            self._generador = FrontierBased(cfg)
+            self._generador = FrontierBased(cfg, self._rng)
         elif method == "Sample Based":
-            self._generador = SampleBased(cfg)
+            self._generador = SampleBased(cfg, self._rng)
+        elif method == "Boustrophedon":
+            self._generador = Boustrophedon(cfg, self._rng)
+        elif method == "Voronoi":
+            self._generador = VoronoiExploracion(cfg, self._rng)
         else:
-            self._generador = Hybrid(cfg)
+            self._generador = Hybrid(cfg, self._rng)
         self._objetivos = []
         self._regiones = []
         self._reservas = {}
@@ -270,6 +440,7 @@ class ExplorationPlanner:
                 r.ruta = []
 
         es_sample = isinstance(self._generador, SampleBased)
+        es_voronoi = isinstance(self._generador, VoronoiExploracion)
 
         if ahora - self._ultima_generacion >= self.cfg.plan_interval_s:
             generados = self._generador.generar(mundo)
@@ -301,6 +472,8 @@ class ExplorationPlanner:
 
         if es_sample:
             self._asignar_legacy(mundo)
+        elif es_voronoi:
+            self._asignar_voronoi(mundo, gs)
         else:
             self._asignar_regiones(mundo, gs)
 
@@ -371,3 +544,28 @@ class ExplorationPlanner:
             self._reservas[mundo.robots.index(r)] = (int(t["y"] // gs), int(t["x"] // gs))
             libres.remove(r)
             disponibles.remove(t)
+
+    def _asignar_voronoi(self, mundo, gs):
+        """Asignacion Voronoi: cada robot recibe en exclusiva la region cuyo
+        sitio (centroide de su particion) le corresponde. Si su region no tiene
+        objetivo disponible (cubierta o bloqueada por una pared nueva), el robot
+        cae al objetivo mas cercano no reservado de otra region, lo que en el
+        siguiente plan_interval_s dispara el recalculo de la particion."""
+        if not self._regiones:
+            return
+        libres = [r for r in mundo.robots if r.necesita_objetivo]
+        if not libres:
+            return
+        for r in libres:
+            idx = mundo.robots.index(r)
+            propias = [t for t in self._regiones if t.get("robot") == idx]
+            disponibles = [t for t in propias
+                           if self._celda_objetivo(t["x"], t["y"], gs) not in self._no_go]
+            if not disponibles:
+                disponibles = [t for t in self._regiones
+                               if self._celda_objetivo(t["x"], t["y"], gs) not in self._no_go]
+            if not disponibles:
+                continue
+            t = min(disponibles, key=lambda tt: math.hypot(r.x - tt["x"], r.y - tt["y"]))
+            r.asignar_objetivo(t["x"], t["y"], mundo)
+            self._reservas[idx] = (int(t["y"] // gs), int(t["x"] // gs))

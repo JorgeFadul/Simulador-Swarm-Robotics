@@ -1,0 +1,50 @@
+map_width: 400
+map_height: 400
+grid_size: 20
+num_robots: 3
+nombre: Salones Abiertos
+descripcion: Paredes internas aisladas tipo estanterias/divisores.
+walls:
+- x: 160
+  y: 100
+  width: 26
+  height: 90
+  angle: 0
+- x: 245
+  y: 100
+  width: 26
+  height: 90
+  angle: 0
+- x: 160
+  y: 310
+  width: 26
+  height: 90
+  angle: 0
+- x: 245
+  y: 310
+  width: 26
+  height: 90
+  angle: 0
+- x: 80
+  y: 200
+  width: 90
+  height: 26
+  angle: 0
+- x: 320
+  y: 200
+  width: 90
+  height: 26
+  angle: 0
+defecto_blobs:
+- cx: 70.4
+  cy: 114.3
+  radio: 34
+  semilla: 2500
+- cx: 358.3
+  cy: 305.2
+  radio: 34
+  semilla: 2501
+- cx: 55.0
+  cy: 311.7
+  radio: 34
+  semilla: 2502

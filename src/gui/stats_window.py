@@ -3,6 +3,9 @@ from tkinter import ttk
 import numpy as np
 from PIL import Image, ImageTk
 from ..core.mundo import SCOUTED, VISITED, DISCOVERED
+from ..core.config import (
+    ESTRATEGIAS_EXPLORACION, ESTRATEGIAS_INSPECCION, ESTRATEGIAS_HIBRIDO,
+)
 
 COL_SCOUTED = (0, 100, 0)
 COL_VISITED = (0, 200, 0)
@@ -77,18 +80,31 @@ class StatsWindow:
         self.window.destroy()
 
     def _build_individual_tab(self, parent):
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(3, weight=1)
+
         top = ttk.Frame(parent)
-        top.pack(fill="x", padx=8, pady=8)
+        top.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
         ttk.Label(top, text="Robot:").pack(side="left")
         self.robot_var = tk.StringVar()
-        self.robot_menu = ttk.Combobox(top, textvariable=self.robot_var, state="readonly", width=10)
+        self.robot_menu = ttk.Combobox(top, textvariable=self.robot_var,
+                                       state="readonly", width=10)
         self.robot_menu.pack(side="left", padx=8)
 
-        self.canvas_ind = tk.Canvas(parent, bg="#111118", height=220)
-        self.canvas_ind.pack(fill="x", padx=8)
+        self.canvas_ind = tk.Canvas(parent, bg="#111118", height=240)
+        self.canvas_ind.grid(row=1, column=0, sticky="ew", padx=8)
 
-        self.canvas_robot_map = tk.Canvas(parent, bg="#111118", height=220)
-        self.canvas_robot_map.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        bat_frame = ttk.Frame(parent)
+        bat_frame.grid(row=2, column=0, sticky="ew", padx=8, pady=(6, 2))
+        ttk.Label(bat_frame, text="Bateria:").pack(side="left")
+        self.bateria_bar = ttk.Progressbar(bat_frame, maximum=100.0, length=180)
+        self.bateria_bar.pack(side="left", padx=8)
+        self.bateria_label = ttk.Label(bat_frame, text="--", width=30, anchor="w")
+        self.bateria_label.pack(side="left")
+
+        self.canvas_robot_map = tk.Canvas(parent, bg="#111118", height=200)
+        self.canvas_robot_map.grid(row=3, column=0, sticky="nsew", padx=8,
+                                   pady=(0, 8))
 
     def _build_cobertura_tab(self, parent):
         self.canvas_cob = tk.Canvas(parent, bg="#111118")
@@ -174,12 +190,32 @@ class StatsWindow:
         self.ver_fronteras_var = tk.BooleanVar(value=self.sim.ver_fronteras)
         self.ver_objetivos_var = tk.BooleanVar(value=self.sim.ver_objetivos)
         self.ver_intencion_var = tk.BooleanVar(value=self.sim.ver_intencion)
+        self.ver_defectos_var = tk.BooleanVar(value=self.sim.ver_defectos)
         ttk.Checkbutton(vis_frame, text="Fronteras", variable=self.ver_fronteras_var,
                         command=self._aplicar_visual).pack(side="left", padx=2)
         ttk.Checkbutton(vis_frame, text="Objetivos", variable=self.ver_objetivos_var,
                         command=self._aplicar_visual).pack(side="left", padx=2)
         ttk.Checkbutton(vis_frame, text="Intencion", variable=self.ver_intencion_var,
                         command=self._aplicar_visual).pack(side="left", padx=2)
+        ttk.Checkbutton(vis_frame, text="Defectos", variable=self.ver_defectos_var,
+                        command=self._aplicar_visual).pack(side="left", padx=2)
+
+        ttk.Separator(f, orient="horizontal").pack(fill="x", pady=8)
+
+        # --- Etapa y transicion (modo hibrido) ---
+        ttk.Label(f, text="Etapa:", font=("Arial", 10, "bold")).pack(anchor="w")
+        etapa_frame = ttk.Frame(f)
+        etapa_frame.pack(fill="x", pady=4)
+        self.etapa_label = ttk.Label(etapa_frame, text="Exploracion",
+                                     font=("Arial", 10, "bold"), foreground="#88aaff")
+        self.etapa_label.pack(side="left", padx=(0, 10))
+        self.force_boton = ttk.Button(etapa_frame, text="Transicionar a Inspeccion",
+                                      command=self._forzar_inspeccion, state="disabled")
+        self.force_boton.pack(side="left")
+        ttk.Label(f, text="Solo disponible en modo Hibrido (transicion automatica "
+                          "Exploracion -> Inspeccion).",
+                  font=("Arial", 8)).pack(anchor="w", pady=(2, 0))
+        self._actualizar_force_boton()
 
         ttk.Separator(f, orient="horizontal").pack(fill="x", pady=8)
 
@@ -234,30 +270,78 @@ class StatsWindow:
         f = ttk.Frame(scroll_frame, padding=12)
         f.pack(fill="both", expand=True)
 
-        ttk.Label(f, text="Estrategia de exploracion:", font=("Arial", 10, "bold")).pack(anchor="w")
-        self.strategy_var = tk.StringVar(value=self.sim.cfg.strategy)
-        strat_frame = ttk.Frame(f)
-        strat_frame.pack(fill="x", pady=4)
-        self.strategy_combo = ttk.Combobox(strat_frame, textvariable=self.strategy_var,
-                      values=["Random Walk", "Frontier Based", "Sample Based", "Hybrid"],
-                      state="readonly", width=30)
-        self.strategy_combo.pack(side="left")
-        self.strategy_combo.bind("<<ComboboxSelected>>", self._cambiar_estrategia)
+        # --- Selector de modo de fase ---
+        ttk.Label(f, text="Modo de fase:", font=("Arial", 11, "bold")).pack(anchor="w")
+        modo_frame = ttk.Frame(f)
+        modo_frame.pack(fill="x", pady=4)
+        self.modo_var = tk.StringVar(value=self.sim.cfg.modo_fase)
+        self.modo_combo = ttk.Combobox(
+            modo_frame, textvariable=self.modo_var,
+            values=["exploracion", "inspeccion", "hibrido"],
+            state="readonly", width=20)
+        self.modo_combo.pack(side="left")
+        self.modo_combo.bind("<<ComboboxSelected>>", self._cambiar_modo)
+
+        # Label informativa del modo
+        self.modo_info_label = ttk.Label(modo_frame, text="", font=("Arial", 9))
+        self.modo_info_label.pack(side="left", padx=10)
+        self._actualizar_modo_info()
+
+        ttk.Separator(f, orient="horizontal").pack(fill="x", pady=8)
+
+        # --- Estrategia de Exploracion ---
+        self._exp_frame = ttk.LabelFrame(f, text="Estrategia de Exploracion",
+                                          padding=8)
+        self._exp_frame.pack(fill="x", pady=4)
+        self.strategy_exp_var = tk.StringVar(value=self.sim.cfg.estrategia_exploracion)
+        self.strategy_exp_combo = ttk.Combobox(
+            self._exp_frame, textvariable=self.strategy_exp_var,
+            values=list(ESTRATEGIAS_EXPLORACION),
+            state="readonly", width=30)
+        self.strategy_exp_combo.pack(side="left")
+        self.strategy_exp_combo.bind("<<ComboboxSelected>>", self._cambiar_estrategia_exp)
+
+        # --- Estrategia de Inspeccion ---
+        self._insp_frame = ttk.LabelFrame(f, text="Estrategia de Inspeccion",
+                                           padding=8)
+        self._insp_frame.pack(fill="x", pady=4)
+        self.strategy_insp_var = tk.StringVar(value=self.sim.cfg.estrategia_inspeccion)
+        self.strategy_insp_combo = ttk.Combobox(
+            self._insp_frame, textvariable=self.strategy_insp_var,
+            values=list(ESTRATEGIAS_INSPECCION),
+            state="readonly", width=30)
+        self.strategy_insp_combo.pack(side="left")
+        self.strategy_insp_combo.bind("<<ComboboxSelected>>", self._cambiar_estrategia_insp)
+
+        # --- Estrategia Hibrida ---
+        self._hib_frame = ttk.LabelFrame(f, text="Estrategia Hibrida",
+                                          padding=8)
+        self._hib_frame.pack(fill="x", pady=4)
+        self.strategy_hib_var = tk.StringVar(value=self.sim.cfg.estrategia_hibrido)
+        self.strategy_hib_combo = ttk.Combobox(
+            self._hib_frame, textvariable=self.strategy_hib_var,
+            values=list(ESTRATEGIAS_HIBRIDO),
+            state="readonly", width=30)
+        self.strategy_hib_combo.pack(side="left")
+        self.strategy_hib_combo.bind("<<ComboboxSelected>>", self._cambiar_estrategia_hib)
+
+        # Aplicar estado inicial (habilitar/deshabilitar segun modo)
+        self._actualizar_estado_dropdowns()
 
         ttk.Separator(f, orient="horizontal").pack(fill="x", pady=8)
         ttk.Label(f, text="Los parametros se aplican a las estrategias que usan "
-                          "planificador (Frontier, Sample e Hybrid).",
+                          "planificador (Frontier, Sample, Hybrid Based, Boustrophedon).",
                   font=("Arial", 8)).pack(anchor="w", pady=(0, 4))
 
         self._build_param_section(f, "Objetivo global",
             ["exploration_goal"])
         self._build_param_section(f, "Planificacion",
             ["plan_interval_s", "goal_reached_radius_px", "goal_timeout_s"])
-        self._build_param_section(f, "Fronteras (Frontier / Hybrid)",
+        self._build_param_section(f, "Fronteras (Frontier / Hybrid Based)",
             ["frontier_min_size"])
-        self._build_param_section(f, "Muestreo (Sample / Hybrid)",
+        self._build_param_section(f, "Muestreo (Sample / Hybrid Based)",
             ["sample_candidates", "sample_per_cluster", "sample_cost_weight", "sample_targets"])
-        self._build_param_section(f, "Movimiento dirigido (Frontier / Sample / Hybrid)",
+        self._build_param_section(f, "Movimiento dirigido (Frontier / Sample / Hybrid Based)",
             ["dirigido_avance_min", "dirigido_umbral_giro_deg"])
         self._build_param_section(f, "Evitacion reactiva (dirigido)",
             ["dirigido_peso_evasion_imminente",
@@ -265,18 +349,63 @@ class StatsWindow:
              "dirigido_peso_evasion_suave"])
 
         ttk.Separator(f, orient="horizontal").pack(fill="x", pady=8)
-        ttk.Label(f, text="El Random Walk solo usa los intervalos de la pestaña "
-                          "Controles.", font=("Arial", 8)).pack(anchor="w")
-        ttk.Label(f, text="En estrategias dirigidas, un robot sin objetivo "
-                          "asignado se detiene y espera al planificador "
-                          "(no hace random walk).", font=("Arial", 8)).pack(anchor="w")
+        ttk.Label(f, text="Random Walk no usa planificador; los robots se mueven "
+                          "aleatoriamente.", font=("Arial", 8)).pack(anchor="w")
 
         self._sync_params_from_cfg()
 
-    def _cambiar_estrategia(self, *_):
-        self.sim.cfg.strategy = self.strategy_var.get()
+    def _cambiar_modo(self, *_):
+        """Cambia el modo de fase y actualiza la estrategia activa."""
+        self.sim.cfg.modo_fase = self.modo_var.get()
+        self.sim.cfg.sync_strategy()
+        self._actualizar_estado_dropdowns()
+        self._actualizar_modo_info()
         if self.sim.estado == "running":
             self.sim.planner = self.sim._crear_planner()
+
+    def _cambiar_estrategia_exp(self, *_):
+        self.sim.cfg.estrategia_exploracion = self.strategy_exp_var.get()
+        self.sim.cfg.sync_strategy()
+        if self.sim.estado == "running" and self.sim.cfg.modo_fase == "exploracion":
+            self.sim.planner = self.sim._crear_planner()
+
+    def _cambiar_estrategia_insp(self, *_):
+        self.sim.cfg.estrategia_inspeccion = self.strategy_insp_var.get()
+        self.sim.cfg.sync_strategy()
+        if self.sim.estado == "running" and self.sim.cfg.modo_fase == "inspeccion":
+            self.sim.planner = self.sim._crear_planner()
+
+    def _cambiar_estrategia_hib(self, *_):
+        self.sim.cfg.estrategia_hibrido = self.strategy_hib_var.get()
+        self.sim.cfg.sync_strategy()
+        if self.sim.estado == "running" and self.sim.cfg.modo_fase == "hibrido":
+            self.sim.planner = self.sim._crear_planner()
+
+    def _actualizar_estado_dropdowns(self):
+        """Habilita/deshabilita los dropdowns segun el modo activo."""
+        modo = self.sim.cfg.modo_fase
+        self.strategy_exp_combo.config(
+            state="readonly" if modo == "exploracion" else "disabled")
+        self.strategy_insp_combo.config(
+            state="readonly" if modo == "inspeccion" else "disabled")
+        self.strategy_hib_combo.config(
+            state="readonly" if modo == "hibrido" else "disabled")
+
+    def _actualizar_modo_info(self):
+        """Actualiza la label informativa del modo."""
+        if not hasattr(self, "modo_info_label"):
+            return
+        modo = self.sim.cfg.modo_fase
+        if modo == "exploracion":
+            txt = "Solo exploracion (sin inspeccion)"
+            fg = "#88aaff"
+        elif modo == "inspeccion":
+            txt = "Solo inspeccion (requiere mapa pre-explorado)"
+            fg = "#88ff88"
+        else:
+            txt = "Exploracion + Inspeccion en una etapa"
+            fg = "#ffcc44"
+        self.modo_info_label.config(text=txt, foreground=fg)
 
     def _build_param_section(self, parent, title, keys):
         ttk.Separator(parent, orient="horizontal").pack(fill="x", pady=8)
@@ -401,7 +530,10 @@ class StatsWindow:
                 f"dirigido_peso_evasion_fuerte={cfg.dirigido_peso_evasion_fuerte}",
                 f"dirigido_peso_evasion_suave={cfg.dirigido_peso_evasion_suave}",
                 f"dirigido_umbral_giro_deg={cfg.dirigido_umbral_giro_deg}",
-                f"strategy={self.strategy_var.get()}",
+                f"modo_fase={cfg.modo_fase}",
+                f"estrategia_exploracion={cfg.estrategia_exploracion}",
+                f"estrategia_inspeccion={cfg.estrategia_inspeccion}",
+                f"estrategia_hibrido={cfg.estrategia_hibrido}",
             ]
             with open(params_path, "w") as f:
                 f.write("\n".join(lines) + "\n")
@@ -422,9 +554,25 @@ class StatsWindow:
             for key, var in self._param_vars.items():
                 if key in data:
                     var.set(data[key])
-            if "strategy" in data:
-                self.strategy_var.set(data["strategy"])
-            self.sim.cfg.strategy = self.strategy_var.get()
+
+            # Cargar modo y estrategias
+            if "modo_fase" in data:
+                self.sim.cfg.modo_fase = data["modo_fase"]
+                self.modo_var.set(data["modo_fase"])
+            if "estrategia_exploracion" in data:
+                self.sim.cfg.estrategia_exploracion = data["estrategia_exploracion"]
+                self.strategy_exp_var.set(data["estrategia_exploracion"])
+            if "estrategia_inspeccion" in data:
+                self.sim.cfg.estrategia_inspeccion = data["estrategia_inspeccion"]
+                self.strategy_insp_var.set(data["estrategia_inspeccion"])
+            if "estrategia_hibrido" in data:
+                self.sim.cfg.estrategia_hibrido = data["estrategia_hibrido"]
+                self.strategy_hib_var.set(data["estrategia_hibrido"])
+
+            self.sim.cfg.sync_strategy()
+            self._actualizar_estado_dropdowns()
+            self._actualizar_modo_info()
+
             if self.sim.estado == "running":
                 self.sim.planner = self.sim._crear_planner()
             self.config_msg.config(text=f"Cargado desde {params_path}", foreground="#8f8")
@@ -466,6 +614,21 @@ class StatsWindow:
         self.sim.ver_fronteras = self.ver_fronteras_var.get()
         self.sim.ver_objetivos = self.ver_objetivos_var.get()
         self.sim.ver_intencion = self.ver_intencion_var.get()
+        if hasattr(self, "ver_defectos_var"):
+            self.sim.ver_defectos = self.ver_defectos_var.get()
+
+    def _forzar_inspeccion(self):
+        self.sim.forzar_transicion_inspeccion()
+        self._actualizar_force_boton()
+
+    def _actualizar_force_boton(self):
+        """Habilita el boton de transicion solo en modo hibrido."""
+        if not hasattr(self, "force_boton"):
+            return
+        es_hibrido = self.sim.cfg.modo_fase == "hibrido"
+        en_marcha = self.sim.estado == "running" and not self.sim.transicionado
+        estado = "normal" if (es_hibrido and en_marcha) else "disabled"
+        self.force_boton.config(state=estado)
 
     def _pausar_sim(self):
         if self.sim.estado == "running":
@@ -499,6 +662,21 @@ class StatsWindow:
         self._actualizar_individual_map()
         self._actualizar_cobertura()
         self._actualizar_global()
+        self._actualizar_modo_info()
+        self._actualizar_force_boton()
+        self._actualizar_etapa_label()
+
+    def _actualizar_etapa_label(self):
+        if not hasattr(self, "etapa_label"):
+            return
+        etapa = self.sim.etapa
+        if self.sim.transicionado:
+            texto = "Inspeccion"
+            fg = "#8affa0"
+        else:
+            texto = "Exploracion"
+            fg = "#88aaff"
+        self.etapa_label.config(text=texto, foreground=fg)
 
     def _actualizar_lista_robots(self):
         robots = self.sim.mundo.robots
@@ -516,17 +694,22 @@ class StatsWindow:
         robots = self.sim.mundo.robots
         sel = self.robot_var.get()
         if not sel or not robots:
+            self.bateria_bar["value"] = 0.0
+            self.bateria_label.config(text="--")
             self.canvas_ind.create_text(cw // 2, h // 2, text="Sin datos",
                                         fill="#666", font=("Arial", 14))
             return
         idx = int(sel.split()[1])
         if idx >= len(robots):
+            self.bateria_bar["value"] = 0.0
+            self.bateria_label.config(text="--")
             return
         r = robots[idx]
         valores = [
             ("Pisadas", r.visitadas_robot, COL_VISITED),
             ("Scouteadas", r.scouteadas_robot, COL_SCOUTED),
             ("Muros", r.paredes_robot, COL_DISCOVERED),
+            ("Tapadas", r.energia.picos_arranque, (255, 200, 50)),
         ]
         max_val = max((v for _, v, _ in valores), default=1)
         if max_val == 0:
@@ -534,7 +717,7 @@ class StatsWindow:
         self.canvas_ind.create_text(cw // 2, 14, text=sel, fill="#fff",
                                     font=("Arial", 12, "bold"))
         bar_w = 70
-        spacing = 25
+        spacing = 18
         total_w = len(valores) * bar_w + (len(valores) - 1) * spacing
         x_start = (cw - total_w) // 2
         graph_h = h - 50
@@ -550,6 +733,11 @@ class StatsWindow:
                                         fill="#aaa", font=("Arial", 8))
             self.canvas_ind.create_text(x + bar_w // 2, y_base - bar_h - 8, text=str(val),
                                         fill="#fff", font=("Arial", 9, "bold"))
+
+        # Bateria del robot seleccionado
+        self.bateria_bar["value"] = r.energia.porcentaje_bateria
+        self.bateria_label.config(
+            text=f"{r.energia.porcentaje_bateria:.1f}%  ({r.energia.energia_consumida_total:.1f} J usados)")
 
     def _actualizar_individual_map(self):
         self.canvas_robot_map.delete("all")
@@ -636,15 +824,43 @@ class StatsWindow:
         pct_total = 100.0 * (v + s + d) / total if total else 0
         tiempo = self.sim.tiempo_simulado
         fps = self.sim.fps_actual
-        estrategia = self.sim.cfg.strategy
+        estrategia = self.sim.cfg._estrategia_activa()
+        modo = self.sim.cfg.modo_fase
         pendientes = self.sim.planner.objetivos_pendientes if self.sim.planner else 0
         if self.sim.estado == "completado":
             resultado = (f"COMPLETADO: mapa al {pct_total:.1f}% en {self.sim.tiempo_final:.2f} s\n"
                          f"(no es necesario visitar todas las casillas)\n")
         else:
             resultado = f"Objetivos pendientes: {pendientes}\n"
+
+        energia_total = sum(r.energia.energia_consumida_total for r in m.robots)
+        energia_mov = sum(r.energia.consumida_movimiento for r in m.robots)
+        energia_ins = sum(r.energia.consumida_inspeccion for r in m.robots)
+        picos = sum(r.energia.picos_arranque for r in m.robots)
+        bateria_media = (sum(r.energia.porcentaje_bateria for r in m.robots) / len(m.robots)
+                         if m.robots else 0.0)
+
+        # Conteos de celdas (vista / visitada / inspeccionada / defectuosa)
+        vistas_c = m._scouteadas + m._visitadas
+        ins = m._inspeccionadas
+        def_c = m._defectuosas
+        pct_vistas = 100.0 * vistas_c / libres if libres else 0.0
+        pct_visit = 100.0 * v / libres if libres else 0.0
+        pct_ins = 100.0 * ins / libres if libres else 0.0
+        pct_def = 100.0 * def_c / ins if ins else 0.0
+
+        por_robot = []
+        for i, r in enumerate(m.robots):
+            pr = 100.0 * r.inspeccionadas_robot / libres if libres else 0.0
+            por_robot.append(f"  R{i}: vistas={r.scouteadas_robot} "
+                             f"visit={r.visitadas_robot} "
+                             f"inspec={r.inspeccionadas_robot}({pr:.1f}%) "
+                             f"defect={r.defectuosas_robot}")
+        por_robot_txt = "\n".join(por_robot) if por_robot else "  (sin robots)"
+
         texto = (
-            f"Estrategia:        {estrategia}\n"
+            f"Estrategia:        {estrategia} [modo: {modo}]\n"
+            f"Etapa:             {self.sim.etapa.upper()}\n"
             f"Tiempo simulado:   {tiempo:.2f} s\n"
             f"FPS:               {fps:.1f}\n"
             f"Pasos totales:     {self.sim.pasos_totales}\n"
@@ -653,15 +869,20 @@ class StatsWindow:
             f"Libres:            {libres}\n"
             f"Paredes:           {paredes}\n"
             f"---\n"
-            f"Visitadas:         {v}  ({100*v/libres:.1f}% libres)\n"
-            f"Scouteadas:        {s}  ({100*s/libres:.1f}% libres)\n"
-            f"Muros descubiertos:{d}  ({pct_paredes:.1f}% paredes)\n"
+            f"Celdas vistas:     {vistas_c}  ({pct_vistas:.1f}% libres)\n"
+            f"Celdas visitadas:  {v}  ({pct_visit:.1f}% libres)\n"
+            f"Celdas inspecc.:   {ins}  ({pct_ins:.1f}% libres)\n"
+            f"Celdas defect.:    {def_c}  ({pct_def:.1f}% inspeccionadas)\n"
             f"---\n"
+            f"Muros descubiertos:{d}  ({pct_paredes:.1f}% paredes)\n"
             f"Cobertura libre:   {pct_libres:.1f}%\n"
             f"Cobertura paredes: {pct_paredes:.1f}%\n"
             f"Mapa descubierto:  {pct_total:.1f}%\n"
             f"---\n"
             f"Robots:            {len(m.robots)}\n"
+            f"Por robot:\n{por_robot_txt}\n"
+            f"Energia enjambre:  {energia_total:.1f} J  (mov {energia_mov:.1f} + inspeccion {energia_ins:.1f})\n"
+            f"Bateria media:     {bateria_media:.1f}%  (picos de arranque: {picos})\n"
             f"---\n"
             f"{resultado}"
         )

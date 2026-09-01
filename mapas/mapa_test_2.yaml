@@ -1,0 +1,52 @@
+map_width: 400
+map_height: 400
+grid_size: 20
+num_robots: 3
+nombre: Columnas en Reticula
+descripcion: Columnas internas distribuidas; manchas entre columnas.
+walls:
+- x: 80
+  y: 80
+  width: 24
+  height: 24
+  angle: 0
+- x: 200
+  y: 80
+  width: 24
+  height: 24
+  angle: 0
+- x: 320
+  y: 80
+  width: 24
+  height: 24
+  angle: 0
+- x: 80
+  y: 200
+  width: 24
+  height: 24
+  angle: 0
+- x: 320
+  y: 200
+  width: 24
+  height: 24
+  angle: 0
+- x: 80
+  y: 320
+  width: 24
+  height: 24
+  angle: 0
+- x: 200
+  y: 320
+  width: 24
+  height: 24
+  angle: 0
+- x: 320
+  y: 320
+  width: 24
+  height: 24
+  angle: 0
+defecto_blobs:
+- cx: 206.7
+  cy: 174.8
+  radio: 35
+  semilla: 2200

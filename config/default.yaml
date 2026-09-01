@@ -15,7 +15,19 @@ exploration_threshold: 0.99
 exploration_radius_multiplier: 1.5
 robot_turn_speed_rad_s: 3.14159
 
-strategy: "Frontier Based"
+# --- Sistema de modos y estrategias ---
+# Modo de fase: "exploracion", "inspeccion" o "hibrido"
+modo_fase: "exploracion"
+
+# Estrategia por modo (solo la del modo activo se usa):
+#   exploracion: Random Walk, Frontier Based, Sample Based, Hybrid,
+#                Boustrophedon, RL Exploracion
+#   inspeccion:  Voronoi, Boustrophedon Inspeccion, RL Inspeccion
+#   hibrido:     Random Walk Hibrido, RL Hibrido
+estrategia_exploracion: "Frontier Based"
+estrategia_inspeccion: "Voronoi"
+estrategia_hibrido: "Random Walk Hibrido"
+
 exploration_goal: 0.99
 plan_interval_s: 1.0
 goal_reached_radius_px: 15
@@ -32,6 +44,39 @@ dirigido_peso_evasion_imminente: 0.5
 dirigido_peso_evasion_fuerte: 0.4
 dirigido_peso_evasion_suave: 0.8
 dirigido_umbral_giro_deg: 5.0
+
+# --- Modelo de energia (bateria) ---
+masa_kg: 0.35
+radio_rueda_m: 0.025
+ancho_trocha_m: 0.12
+eficiencia_transmision: 0.6
+coef_rodadura: 0.015
+masa_rueda_kg: 0.02
+num_ruedas_motor: 2
+bateria_capacidad_j: 1500.0
+energia_inspeccion_j: 0.5
+inspeccion_pausa_s: 1.0
+
+# --- Fase 3: Voronoi recursivo + Market Auction ---
+auction_defectivo_factor: 0.15
+auction_sano_factor: 0.25
+auction_profundidad_p: 0.97
+
+# --- Inspeccion de baldosas ---
+prob_defecto: 0.2
+inspeccionar_al_visitar: true
+# false = colectivo (mundo.inspec), true = individual (robot.inspec_robot)
+inspeccion_individual: false
+ruido_inspeccion_sigma: 0.0
+defecto_blobs: []
+
+# --- Transicion (modo hibrido: umbral de descubrimiento) ---
+transicion:
+  umbral_descubierto: 0.99
+  tiempo_sin_scouteo_s: 60.0
+
+# --- Modo headless (CLI) ---
+headless_max_pasos: 60000
 
 walls:
   - {x: 330, y: 500, width: 20, height: 600, angle: 0}

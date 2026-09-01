@@ -1,0 +1,44 @@
+map_width: 400
+map_height: 400
+grid_size: 20
+num_robots: 3
+nombre: Particiones Diagonal
+descripcion: Paredes inclinadas que crean pasillos diagonales.
+walls:
+- x: 120
+  y: 120
+  width: 22
+  height: 140
+  angle: 35
+- x: 280
+  y: 120
+  width: 22
+  height: 140
+  angle: -35
+- x: 120
+  y: 290
+  width: 22
+  height: 140
+  angle: -35
+- x: 280
+  y: 290
+  width: 22
+  height: 140
+  angle: 35
+defecto_blobs:
+- cx: 202.8
+  cy: 100.1
+  radio: 36
+  semilla: 2400
+- cx: 45.1
+  cy: 322.1
+  radio: 36
+  semilla: 2401
+- cx: 197.1
+  cy: 269.9
+  radio: 36
+  semilla: 2402
+- cx: 359.8
+  cy: 43.7
+  radio: 36
+  semilla: 2403

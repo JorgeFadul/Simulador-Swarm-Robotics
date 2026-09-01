@@ -1,7 +1,8 @@
 import math
 import numpy as np
 import pygame
-from ..core.mundo import Mundo, SCOUTED, VISITED, DISCOVERED
+from ..core.mundo import (Mundo, SCOUTED, VISITED, DISCOVERED,
+                          SANA, DEFECTUOSA, INSPECCIONADA, RESULTADO_DESCONOCIDO)
 
 
 class Renderer:
@@ -10,13 +11,20 @@ class Renderer:
         self._thumb_bg = None
 
     def draw(self, mundo: Mundo, estado="running", plan=None,
-             ver_fronteras=True, ver_objetivos=True, ver_intencion=True):
+             ver_fronteras=True, ver_objetivos=True, ver_intencion=True,
+             ver_defectos=False):
         self.screen.fill((20, 20, 30))
         self._draw_exploracion(mundo, estado)
+        if ver_defectos:
+            self._draw_defectos(mundo)
         if ver_fronteras and plan is not None and getattr(plan, "frontera_mask", None) is not None:
             self._draw_fronteras(mundo, plan.frontera_mask)
         self._draw_grid(mundo)
         self._draw_walls(mundo)
+        # Los resultados de inspeccion (probando/sana/defectuosa) se dibujan
+        # despues de la capa rosada de ground truth para que queden por encima
+        # del toggle de defectos.
+        self._draw_inspeccion(mundo)
         if ver_objetivos:
             self._draw_goals(mundo)
         if ver_intencion:
@@ -24,6 +32,50 @@ class Renderer:
         self._draw_robots(mundo)
         if mundo.robots:
             self._draw_robot_thumbnails(mundo)
+
+    def _draw_inspeccion(self, mundo: Mundo):
+        """Dibuja el resultado visible de la inspeccion de baldosas, que es el
+        foco de la etapa de Inspeccion (2E):
+
+        - amarillo: la celda que un robot esta probando AHORA (pausa de percusion).
+        - azul:     celda inspeccionada cuyo resultado fue SANA (sin defecto).
+        - rojo:     celda inspeccionada cuyo resultado fue DEFECTUOSA.
+
+        A diferencia de la capa oculta de `_draw_defectos` (ground truth, solo
+        con el toggle del operador), estas celdas se muestran siempre, porque el
+        resultado de la percusion es conocido por los robots y no es "oculto".
+        """
+        gs = mundo.cfg.grid_size
+        for r in range(mundo.rows):
+            for c in range(mundo.cols):
+                color = None
+                if mundo.inspec[r, c] == INSPECCIONADA:
+                    color = (70, 130, 230) if mundo.resultado[r, c] == SANA else (230, 60, 40)
+                rect = (c * gs, r * gs, gs, gs)
+                if color is not None:
+                    pygame.draw.rect(self.screen, color, rect)
+        # Celda en prueba (amarillo) por encima del resto
+        for robot in mundo.robots:
+            if robot.inspeccionando and robot.celda_probando is not None:
+                r, c = robot.celda_probando
+                rect = (c * gs, r * gs, gs, gs)
+                pygame.draw.rect(self.screen, (255, 210, 0), rect)
+
+    def _draw_defectos(self, mundo: Mundo):
+        """Dibuja la capa oculta de areas afectadas (ground truth) visible solo
+        para el operador (toggle de la pestaña Controles).
+
+        Las celdas defectuosas (ground truth) se pintan en rosado; se dibujan
+        sobre las celdas ya exploradas para que se distingan del fondo.
+        """
+        gs = mundo.cfg.grid_size
+        for r in range(mundo.rows):
+            for c in range(mundo.cols):
+                if not mundo.defectos[r, c]:
+                    continue
+                color = (255, 120, 190)
+                rect = (c * gs, r * gs, gs, gs)
+                pygame.draw.rect(self.screen, color, rect)
 
     def _draw_fronteras(self, mundo: Mundo, mask):
         gs = mundo.cfg.grid_size
@@ -44,33 +96,54 @@ class Renderer:
 
     def _draw_exploracion(self, mundo: Mundo, estado="running"):
         gs = mundo.cfg.grid_size
-        for r in range(mundo.rows):
-            for c in range(mundo.cols):
-                val = mundo.explored[r, c]
-                rect = (c * gs, r * gs, gs, gs)
-                if mundo.grid[r, c] == 0:
-                    if val == 1:
-                        color = (0, 55, 0)
-                    elif val == 2:
-                        color = (0, 110, 0)
+        # En la etapa de Inspeccion se atenua el rastro de la exploracion para
+        # que el foco visual quede en las pruebas de las baldosas (la cobertura
+        # de scouteo ya cumplio su funcion).
+        dim = 0.30 if mundo.etapa == "inspeccion" else 1.0
+        rows, cols = mundo.rows, mundo.cols
+        w, h = cols * gs, rows * gs
+        # La capa de celdas se dibuja por lotes en una Surface cacheadada que se
+        # reconstruye solo cuando cambia la exploracion/etapa (muy barato en
+        # comparacion con un draw.rect por celda cada frame).
+        firma = (mundo.etapa, estado, hash(mundo.explored.tobytes()))
+        if not hasattr(self, "_explo_surf") or self._explo_firma != firma:
+            self._explo_firma = firma
+            arr = np.zeros((rows, cols, 3), dtype=np.uint8)
+            for r in range(rows):
+                for c in range(cols):
+                    val = mundo.explored[r, c]
+                    if mundo.grid[r, c] == 0:
+                        if val == 1:
+                            arr[r, c] = (0, int(55 * dim), 0)
+                        elif val == 2:
+                            arr[r, c] = (0, int(110 * dim), 0)
+                        else:
+                            arr[r, c] = (20, 20, 30)
                     else:
-                        continue
-                else:
-                    if val == 3:
-                        color = (110, 0, 0)
-                    elif estado == "edicion":
-                        color = (60, 40, 40)
-                    else:
-                        color = (30, 15, 15)
-                pygame.draw.rect(self.screen, color, rect)
+                        if val == 3:
+                            arr[r, c] = (110, 0, 0)
+                        elif estado == "edicion":
+                            arr[r, c] = (60, 40, 40)
+                        else:
+                            arr[r, c] = (30, 15, 15)
+            full = np.kron(arr, np.ones((gs, gs, 1), dtype=np.uint8))
+            self._explo_surf = pygame.surfarray.make_surface(full.transpose(1, 0, 2))
+        if w != self._explo_surf.get_width():
+            self._explo_surf = pygame.transform.scale(self._explo_surf, (w, h))
+        self.screen.blit(self._explo_surf, (0, 0))
 
     def _draw_grid(self, mundo: Mundo):
+        # Lineas de grilla como trazos (una linea por fila/columna) en lugar de
+        # un rectangulo por celda: mucho mas barato y visualmente identico.
         gs = mundo.cfg.grid_size
-        for r in range(mundo.rows):
-            for c in range(mundo.cols):
-                color = (60, 50, 50) if mundo.grid[r, c] else (35, 35, 45)
-                rect = (c * gs, r * gs, gs, gs)
-                pygame.draw.rect(self.screen, color, rect, 1)
+        w, h = mundo.cols * gs, mundo.rows * gs
+        color = (50, 50, 60)
+        for c in range(1, mundo.cols):
+            x = c * gs
+            pygame.draw.line(self.screen, color, (x, 0), (x, h), 1)
+        for r in range(1, mundo.rows):
+            y = r * gs
+            pygame.draw.line(self.screen, color, (0, y), (w, y), 1)
 
     def _draw_walls(self, mundo: Mundo):
         for p in mundo.paredes:
@@ -176,27 +249,40 @@ class Renderer:
         font = pygame.font.SysFont("Arial", 9)
         font.render("Indiv.", True, (180, 180, 180))
 
+        if not hasattr(self, "_thumb_cache"):
+            self._thumb_cache = {}
+
         for i, robot in enumerate(robots):
             col_idx = i % per_row
             row_idx = i // per_row
             tx = panel_x + pad + col_idx * (thumb_size + gap)
             ty = panel_y + pad + 12 + row_idx * (thumb_size + gap)
 
-            labels = {SCOUTED: (0, 55, 0), VISITED: (0, 110, 0),
-                      DISCOVERED: (110, 0, 0)}
-            bg_free = (25, 25, 35)
-            bg_wall = (40, 20, 20)
-            arr = np.zeros((rows, cols, 3), dtype=np.uint8)
-            for r in range(rows):
-                for c in range(cols):
-                    val = robot.explored_robot[r, c]
-                    if mundo.grid[r, c] == 0:
-                        arr[r, c] = labels.get(val, bg_free)
-                    else:
-                        arr[r, c] = labels.get(val, bg_wall)
-            surf = pygame.surfarray.make_surface(arr.transpose(1, 0, 2))
-            scaled = pygame.transform.scale(surf, (thumb_size, thumb_size))
-            self.screen.blit(scaled, (tx, ty))
+            # Caché del thumbnail: solo se regenera la superficie cuando cambia
+            # el mapa explorado propio del robot (evita crear Surface por frame).
+            firma = hash(robot.explored_robot.tobytes())
+            key = (id(robot), firma)
+            cached = self._thumb_cache.get(key)
+            if cached is None:
+                labels = {SCOUTED: (0, 55, 0), VISITED: (0, 110, 0),
+                          DISCOVERED: (110, 0, 0)}
+                bg_free = (25, 25, 35)
+                bg_wall = (40, 20, 20)
+                arr = np.zeros((rows, cols, 3), dtype=np.uint8)
+                for r in range(rows):
+                    for c in range(cols):
+                        val = robot.explored_robot[r, c]
+                        if mundo.grid[r, c] == 0:
+                            arr[r, c] = labels.get(val, bg_free)
+                        else:
+                            arr[r, c] = labels.get(val, bg_wall)
+                surf = pygame.surfarray.make_surface(arr.transpose(1, 0, 2))
+                cached = pygame.transform.scale(surf, (thumb_size, thumb_size))
+                # Limita el tamaño de la caché para no retener superficies viejas
+                if len(self._thumb_cache) > 200:
+                    self._thumb_cache.clear()
+                self._thumb_cache[key] = cached
+            self.screen.blit(cached, (tx, ty))
 
             lbl = font.render(str(i), True, (200, 200, 200))
             self.screen.blit(lbl, (tx + 2, ty + 2))

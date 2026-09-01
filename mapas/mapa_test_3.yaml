@@ -1,0 +1,48 @@
+map_width: 400
+map_height: 400
+grid_size: 20
+num_robots: 3
+nombre: Laberinto Abierto
+descripcion: Pasillos sin cerrar que obligan a bordear las paredes.
+walls:
+- x: 100
+  y: 100
+  width: 200
+  height: 22
+  angle: 0
+- x: 100
+  y: 290
+  width: 200
+  height: 22
+  angle: 0
+- x: 210
+  y: 195
+  width: 22
+  height: 200
+  angle: 0
+- x: 70
+  y: 195
+  width: 22
+  height: 110
+  angle: 0
+defecto_blobs:
+- cx: 328.7
+  cy: 269.6
+  radio: 32
+  semilla: 2300
+- cx: 327.6
+  cy: 50.6
+  radio: 32
+  semilla: 2301
+- cx: 55.6
+  cy: 359.9
+  radio: 32
+  semilla: 2302
+- cx: 341.4
+  cy: 136.9
+  radio: 32
+  semilla: 2303
+- cx: 326.8
+  cy: 354.2
+  radio: 32
+  semilla: 2304

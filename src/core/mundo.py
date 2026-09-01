@@ -49,8 +49,18 @@ SCOUTED = 1
 VISITED = 2
 DISCOVERED = 3
 
+# Estado de inspeccion: 0 = no inspeccionada, 1 = inspeccionada
+NO_INSPECCIONADA = 0
+INSPECCIONADA = 1
+
+# Resultado de la inspeccion por celda: -1 = desconocido, 0 = sana, 1 = defectuosa
+RESULTADO_DESCONOCIDO = -1
+SANA = 0
+DEFECTUOSA = 1
+
+
 class Mundo:
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, rng=None):
         self.cfg = cfg
         self.rows = cfg.rows
         self.cols = cfg.cols
@@ -71,6 +81,231 @@ class Mundo:
         self._visitadas = 0
         self._paredes_vistas = 0
 
+        # Inspeccion de baldosas: estado y resultado por celda (curato ground truth).
+        self.inspec = np.zeros((self.rows, self.cols), dtype=np.int8)
+        self.resultado = np.full((self.rows, self.cols), RESULTADO_DESCONOCIDO,
+                                 dtype=np.int8)
+        self._inicializar_defectos(rng)
+        self._inspeccionadas = 0
+        self._defectuosas = 0
+        self.mapa_inicial = self.grabar_mapa_inicial()
+        # Etapa global del enjambre: "exploracion" o "inspeccion" (Fase 1).
+        # La autoridad es Simulacion; se refleja aqui para que los robots y
+        # planificadores lean el estado de dos etapas.
+        self.etapa = "exploracion"
+
+    def cambiar_a_inspeccion(self):
+        """Transicion global a la etapa de Inspeccion (estrategias 2E)."""
+        self.etapa = "inspeccion"
+
+    def _inicializar_defectos(self, rng):
+        """Genera el ground truth de baldosas defectuosas sobre celdas libres.
+
+        Dos modos:
+          * Si `cfg.defecto_blobs` trae una lista de blobs {cx, cy, radio}
+            (mapas de prueba generados algoritmicamente), se crean manchas
+            irregulares de defectos con esas semillas (no se solapan con
+            paredes ni entre si) y se ignoran `prob_defecto`.
+          * Si no hay blobs, se usa la distribucion uniforme con
+            `prob_defecto` (Fase 0).
+
+        El rng llega de la simulacion (sembrado por --semilla). En el modo
+        uniforme la semilla es local para reproducir la misma distribucion en
+        corridas repetidas. En el modo blobs cada blob usa su propia semilla
+        determinista de la definicion del mapa (reproducible sin importar la
+        semilla de la simulacion). Los bordes y paredes nunca son
+        inspeccionables.
+        """
+        self.defectos = np.zeros((self.rows, self.cols), dtype=np.int8)
+        blobs = getattr(self.cfg, "defecto_blobs", None) or []
+        if blobs:
+            self._inicializar_defectos_blobs(blobs)
+        else:
+            prob = self.cfg.prob_defecto
+            if rng is None:
+                rng = np.random.default_rng(0)
+            # Semilla local derivada del rng base para no consumir su secuencia
+            semilla_local = int(rng.integers(0, 2 ** 31))
+            local = np.random.default_rng(semilla_local)
+            defectos = local.random((self.rows, self.cols))
+            mask = (self.grid == 0) & (defectos < prob)
+            self.defectos[mask] = 1
+        self._defectuosas_gt = int(self.defectos.sum())
+
+    def _inicializar_defectos_blobs(self, blobs):
+        """Crea manchas irregulares de defectos a partir de blobs semilla.
+
+        Cada blob se define con {cx, cy, radio} en px sobre el mapa. A partir
+        de la celda central se "crece" una mancha con un paseo aleatorio sesgado
+        radialmente, generando bordes irregulares (ver el algoritmo documentado
+        en CHANGELOG_TESIS). Las celdas de pared y los bordes del mapa nunca
+        se marcan, y cada blob usa una semilla determinista para ser
+        reproducible.
+        """
+        gs = self.cfg.grid_size
+        ultima = None
+        for i, b in enumerate(blobs):
+            cx_px, cy_px = float(b["cx"]), float(b["cy"])
+            radio = max(int(b.get("radio", 0)), 1)
+            semilla = int(b.get("semilla", 1000 + i))
+            rngb = np.random.default_rng(semilla)
+            rc = int(cy_px // gs)
+            cc = int(cx_px // gs)
+            if not (0 <= rc < self.rows and 0 <= cc < self.cols):
+                continue
+            # Centro llamado a ser defectuoso solo si es celda libre
+            if self.grid[rc, cc] == 0:
+                self.defectos[rc, cc] = 1
+            # Crecimiento radial con ruido (caminata aleatoria amortiguada)
+            for _ in range(radio * gs):
+                # Cantidad de pasos proporcional al area esperada del blob
+                nr = rc + int(rngb.integers(-1, 2))
+                nc = cc + int(rngb.integers(-1, 2))
+                # Sesgo radial: probar candidatos cercanos al centro del blob
+                dr = nr - rc
+                dc = nc - cc
+                if (dr * dr + dc * dc) > radio * radio:
+                    continue
+                if not (0 <= nr < self.rows and 0 <= nc < self.cols):
+                    continue
+                if self.grid[nr, nc] != 0:
+                    continue
+                # Evita solape con blobs previos: no marcar si ya es defecto de
+                # otro blob (aunque se permita adyacencia).
+                self.defectos[nr, nc] = 1
+            ultima = (rc, cc)
+
+    def inspeccionar_celda(self, x, y, robot_id=None):
+        """Marca una celda como inspeccionada y registra su resultado binario.
+
+        Devuelve el resultado (SANA/DEFECTUOSA) si la inspeccion se realizo, o
+        None si la celda no es inspeccionable (pared, borde, fuera de rango) o ya
+        estaba inspeccionada. Es el punto de extension donde cada estrategia
+        decide cuando inspeccionar.
+
+        La deteccion es 100 % efectiva en esta fase (sigma de ruido = 0). El
+        metodo `_resultado_con_ruido` es la costura preparada para inyectar
+        ruido gaussiano en la probabilidad de deteccion en fases posteriores.
+        """
+        gs = self.cfg.grid_size
+        c = int(x // gs)
+        r = int(y // gs)
+        if r < 0 or r >= self.rows or c < 0 or c >= self.cols:
+            return None
+        if self.grid[r, c] != 0:
+            return None
+        if self.inspec[r, c]:
+            return None
+        self.inspec[r, c] = INSPECCIONADA
+        self._inspeccionadas += 1
+        res = self._resultado_con_ruido(r, c)
+        if res:
+            self.resultado[r, c] = DEFECTUOSA
+            self._defectuosas += 1
+        else:
+            self.resultado[r, c] = SANA
+        return int(self.resultado[r, c])
+
+    def _resultado_con_ruido(self, r, c):
+        """Resultado de la percusion sobre la celda (r, c).
+
+        Con `ruido_inspeccion_sigma == 0` devuelve el ground truth exacto
+        (deteccion perfecta). Para sigma>0 se corrompe la deteccion con ruido
+        gaussiano sobre una probabilidad de deteccion (a implementar en fases
+        de robustez); en esta fase la estructura queda preparada pero sin
+        ruido.
+        """
+        sigma = getattr(self.cfg, "ruido_inspeccion_sigma", 0.0)
+        gt = int(self.defectos[r, c])
+        if sigma <= 0.0:
+            return gt
+        # Costura para ruido futuro: pzelda defectuosa = gt; se corrompe la
+        # decision con gaussiana. (No activo en Fase 1.)
+        rng = np.random.default_rng()
+        ruido = rng.normal(0.0, sigma)
+        p_detect = gt + ruido
+        return 1 if p_detect >= 0.5 else 0
+
+    def estado_celdas(self):
+        """Estado por celda del mapa con coordenadas (col, fila) y, para celdas
+        libres, la clase de exploracion y el estado/resultado de inspeccion.
+
+        Devuelve una lista de dicts: {x, y, fila, col, tipo, vista, visitada,
+        inspeccionada, resultado}. "tipo" es 0=libre, 1=pared. Solo se listan
+        celdas con algun estado relevante (libres vistas/visitadas/inspeccionadas
+        o paredes descubiertas).
+        """
+        gs = self.cfg.grid_size
+        filas = []
+        for r in range(self.rows):
+            for c in range(self.cols):
+                libre = self.grid[r, c] == 0
+                exp = int(self.explored[r, c])
+                es_vista = libre and exp in (SCOUTED, VISITED)
+                es_visitada = libre and exp == VISITED
+                it = bool(self.inspec[r, c])
+                res = int(self.resultado[r, c])
+                if libre:
+                    if not (es_vista or es_visitada or it):
+                        continue
+                else:
+                    if exp != DISCOVERED:
+                        continue
+                filas.append({
+                    "x": round(c * gs + gs / 2.0, 1),
+                    "y": round(r * gs + gs / 2.0, 1),
+                    "fila": r,
+                    "col": c,
+                    "tipo": 0 if libre else 1,
+                    "vista": bool(es_vista),
+                    "visitada": bool(es_visitada),
+                    "inspeccionada": bool(it),
+                    "resultado": res if it else RESULTADO_DESCONOCIDO,
+                })
+        return filas
+
+    @property
+    def total_libres_inspeccionables(self):
+        return self.total_libres
+
+    def grilla_ocupacion(self):
+        """Devuelve la grilla inicial (0=libre, 1=pared) como lista de filas,
+        para poder reconstruir el mapa exacto del escenario."""
+        return self.grid.tolist()
+
+    def snapshot_escenario(self):
+        """Datos del area original de inspeccion (para reproducir el escenario):
+        dimensiones, grilla de ocupacion, paredes y ground truth de defectos."""
+        return {
+            "map_width": self.width_px,
+            "map_height": self.height_px,
+            "grid_size": self.cfg.grid_size,
+            "filas": self.rows,
+            "columnas": self.cols,
+            "total_celdas": self.rows * self.cols,
+            "celdas_libres": self.total_libres,
+            "celdas_pared": self.total_paredes,
+            "grilla_ocupacion": self.grilla_ocupacion(),
+            "paredes": [{"x": p.x, "y": p.y, "width": p.width, "height": p.height,
+                         "angle": math.degrees(p.angle)} for p in self.paredes],
+            "defectos_gt": self.defectos.tolist(),
+            "prob_defecto": self.cfg.prob_defecto,
+        }
+
+    def grabar_mapa_inicial(self):
+        """Almacena una copia del estado inicial del escenario (ocupacion y
+        ground truth de defectos) tras crear paredes, para poder reproducirlo."""
+        self._mapa_inicial = {
+            "map_width": self.width_px,
+            "map_height": self.height_px,
+            "grid_size": self.cfg.grid_size,
+            "grilla_ocupacion": self.grilla_ocupacion(),
+            "paredes": [{"x": p.x, "y": p.y, "width": p.width, "height": p.height,
+                         "angle": math.degrees(p.angle)} for p in self.paredes],
+            "defectos_gt": self.defectos.tolist(),
+        }
+        return self._mapa_inicial
+
     def marcar_visitado(self, x, y):
         gs = self.cfg.grid_size
         c = int(x // gs)
@@ -88,6 +323,36 @@ class Mundo:
             self._visitadas += 1
             return True
         return False
+
+    def visitar_area(self, x, y, radio):
+        """Marca como VISITED todas las celdas libres dentro de `radio` px del
+        robot, y devuelve cuantas eran nuevas.
+
+        Mejora de la rasterizacion de visita: el robot tiene extension fisica
+        (radio), de modo que al pasar al lado de una pared su cuerpo cubre
+        parcialmente la casilla libre adyacente. Marcar solo la celda del
+        centro dejaba "huecos" de casillas sin visitar pegadas a los bordes de
+        las paredes (el centro nunca caia sobre ellas). Al rasterizar el area
+        cubierta por el robot, esas casillas limítrofes quedan marcadas y no
+        aparecen casillas vacias junto a las paredes.
+        """
+        gs = self.cfg.grid_size
+        min_c = max(0, int((x - radio) // gs))
+        max_c = min(self.cols - 1, int((x + radio) // gs))
+        min_r = max(0, int((y - radio) // gs))
+        max_r = min(self.rows - 1, int((y + radio) // gs))
+        nuevas = 0
+        for r in range(min_r, max_r + 1):
+            for c in range(min_c, max_c + 1):
+                if self.explored[r, c] != 0 or self.grid[r, c] != 0:
+                    continue
+                cx = c * gs + gs / 2
+                cy = r * gs + gs / 2
+                if math.hypot(cx - x, cy - y) <= radio:
+                    self.explored[r, c] = VISITED
+                    self._visitadas += 1
+                    nuevas += 1
+        return nuevas
 
     def explorar_desde(self, x, y, radius):
         gs = self.cfg.grid_size
@@ -120,6 +385,10 @@ class Mundo:
         self._scouteadas = 0
         self._visitadas = 0
         self._paredes_vistas = 0
+        self.inspec.fill(0)
+        self.resultado.fill(RESULTADO_DESCONOCIDO)
+        self._inspeccionadas = 0
+        self._defectuosas = 0
         self.total_libres = int(np.sum(self.grid == 0))
         self.total_paredes = int(np.sum(self.grid == 1))
 
@@ -137,6 +406,17 @@ class Mundo:
         if total == 0:
             return 0.0
         return (self._scouteadas + self._visitadas + self._paredes_vistas) / total
+
+    @property
+    def porcentaje_inspeccionado(self):
+        """Fraccion de celdas libres inspeccionables ya inspeccionadas."""
+        if self.total_libres == 0:
+            return 0.0
+        return self._inspeccionadas / self.total_libres
+
+    def inspeccion_completa(self):
+        """True cuando todas las celdas libres inspeccionables fueron inspeccionadas."""
+        return self._inspeccionadas >= self.total_libres and self.total_libres > 0
 
     def _crear_paredes_perimetrales(self):
         gs = self.cfg.grid_size

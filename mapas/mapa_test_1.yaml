@@ -1,0 +1,40 @@
+map_width: 400
+map_height: 400
+grid_size: 20
+num_robots: 3
+nombre: Corredor Central
+descripcion: 'Pocas paredes: dos bloques laterales crean un corredor central.'
+walls:
+- x: 120
+  y: 130
+  width: 24
+  height: 160
+  angle: 0
+- x: 120
+  y: 300
+  width: 24
+  height: 160
+  angle: 0
+- x: 280
+  y: 130
+  width: 24
+  height: 160
+  angle: 0
+- x: 280
+  y: 300
+  width: 24
+  height: 160
+  angle: 0
+defecto_blobs:
+- cx: 41.8
+  cy: 225.4
+  radio: 40
+  semilla: 2100
+- cx: 200.8
+  cy: 213.2
+  radio: 40
+  semilla: 2101
+- cx: 358.2
+  cy: 283.4
+  radio: 40
+  semilla: 2102
