@@ -1186,6 +1186,15 @@ Esta sección documenta los desarrollos correspondientes a la Fase 4 de la tesis
 - **Evaluación Automatizada**: Módulo para comparar de forma exhaustiva estrategias heurísticas (Random Walk, Frontier-Based, Voronoi, Boustrophedon, etc.) contra modelos RL entrenados.
 - **Métricas e Informes**: Exportación de métricas a archivos CSV (`results/benchmark.csv`, `results/benchmark_summary.csv`) y generación de gráficas comparativas.
 
+### 1.5 Estrategias Heurísticas de Inspección y Exploración (`src/algorithms/inspeccion.py`, `src/algorithms/exploration.py`)
+- **Voronoi Jerárquico por Subasta (Fase 3/4)**:
+  - Partición del espacio mediante diagrama de Voronoi geodésico y subdivisión recursiva en abanico.
+  - Subasta Market Auction Method para asignar tareas a los robots priorizando centroides y niveles superiores.
+- **Boustrophedon (Patrón de Barrido/Serpentina)**:
+  - Generación de rutas tipo barrido de arado (líneas paralelas horizontal/vertical) para cobertura metódica y determinista en la inspección/exploración.
+- **Integración Multimodal**:
+  - Soporte de Voronoi e Inspección Boustrophedon tanto en modo de inspección pura como en estrategias de dos etapas / híbridas.
+
 ## 2. Archivos creados y modificados
 
 | Archivo | Tipo | Cambio |
@@ -1195,9 +1204,11 @@ Esta sección documenta los desarrollos correspondientes a la Fase 4 de la tesis
 | `src/rl/infer.py` | mod | Actualizaciones para inferencia e integración de modelos. |
 | `src/rl/controller.py` | nuevo | Controlador RL para conectar la política entrenada con el bucle de la GUI en Pygame. |
 | `src/rl/benchmark.py` | nuevo | Script de benchmarking comparativo entre heurísticas y RL. |
-| `src/core/simulacion.py` | mod | Integración de estrategias RL en la selección de planners de la simulación. |
-| `src/core/config.py` | mod | Configuración de parámetros para modos RL y soporte en YAML. |
-| `src/robots/robot.py` | mod | Ajustes en navegación y respuesta a comandos del controlador RL. |
-| `src/gui/stats_window.py` | mod | Soporte de UI para seleccionar modelos RL y configurar parámetros asociados. |
-| `config/default.yaml` | mod | Nuevas entradas de configuración para modelos RL y rutas de checkpoints. |
+| `src/algorithms/inspeccion.py` | mod | Implementador del planificador Voronoi estático jerárquico y Boustrophedon. |
+| `src/algorithms/exploration.py` | mod | Refinamiento de generadores de exploración (Frontier, Boustrophedon, Hybrid). |
+| `src/core/simulacion.py` | mod | Integración de estrategias RL, Voronoi y Boustrophedon en el despachador de planners. |
+| `src/core/config.py` | mod | Configuración de parámetros para modos RL, Voronoi y Boustrophedon. |
+| `src/robots/robot.py` | mod | Ajustes en navegación y respuesta a comandos de los controllers. |
+| `src/gui/stats_window.py` | mod | Soporte de UI para elegir modos/estrategias Voronoi, Boustrophedon y RL. |
+| `config/default.yaml` | mod | Nuevas entradas de configuración para modelos RL y parámetros de inspección. |
 | `CHANGELOG_TESIS.md` | mod | Inclusión de esta documentación de cambios. |
