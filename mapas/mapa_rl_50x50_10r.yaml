@@ -1,0 +1,8 @@
+map_width: 1000
+map_height: 1000
+grid_size: 20
+num_robots: 10
+nombre: RL Hibrido 50x50 (10 robots)
+descripcion: 'Grid 50x50 (1000x1000 px) con 10 robots, estandar del simulador, para modo RL Hibrido.'
+walls: []
+defecto_num_blobs: 4

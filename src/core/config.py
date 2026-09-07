@@ -13,7 +13,7 @@ ESTRATEGIAS_INSPECCION = (
     "Random Walk", "Voronoi", "Boustrophedon Inspeccion", "RL Inspeccion",
 )
 ESTRATEGIAS_HIBRIDO = (
-    "Random Walk Hibrido", "RL Hibrido",
+    "Random Walk Hibrido", "RL Hibrido", "RL Hibrido V2",
 )
 
 # Compatibilidad: todas las estrategias validas
@@ -48,8 +48,16 @@ class Config:
         self.exploration_radius_multiplier: float = float(raw.get("exploration_radius_multiplier", 1.5))
         self.robot_turn_speed_rad_s: float = float(raw.get("robot_turn_speed_rad_s", math.pi))
 
-        # --- Nuevo sistema de modos y estrategias ---
-        self.modo_fase: str = str(raw.get("modo_fase", "exploracion"))
+        # --- Modos de simulacion y estrategias ---
+        # Modo (dos opciones):
+        #   "dos_etapas" -> simulacion de dos etapas: exploracion -> inspeccion
+        #                   (transicion dinamica). Usa estrategia_exploracion
+        #                   (fase de exploracion) y estrategia_inspeccion
+        #                   (fase de inspeccion).
+        #   "hibrido"    -> simulacion de una sola etapa: explora e inspecciona
+        #                   a la vez. Usa estrategia_hibrido.
+        self.modo_fase: str = str(raw.get("modo_fase", "dos_etapas"))
+        self._normalizar_modo()
         self.estrategia_exploracion: str = str(raw.get("estrategia_exploracion", "Frontier Based"))
         self.estrategia_inspeccion: str = str(raw.get("estrategia_inspeccion", "Voronoi"))
         self.estrategia_hibrido: str = str(raw.get("estrategia_hibrido", "Random Walk Hibrido"))
@@ -94,13 +102,26 @@ class Config:
         self.inspeccionar_al_visitar: bool = bool(raw.get("inspeccionar_al_visitar", True))
         self.inspeccion_individual: bool = bool(raw.get("inspeccion_individual", False))
         self.ruido_inspeccion_sigma: float = float(raw.get("ruido_inspeccion_sigma", 0.0))
-        self.defecto_blobs: list = list(raw.get("defecto_blobs", []))
+
+        # Defectos por recursion probabilistica de blobs
+        self.defecto_num_blobs: int = int(raw.get("defecto_num_blobs", 7))
+        self.defecto_prob_ortogonal: float = float(raw.get("defecto_prob_ortogonal", 0.90))
+        self.defecto_prob_diagonal: float = float(raw.get("defecto_prob_diagonal", 0.75))
+        self.defecto_decaimiento: float = float(raw.get("defecto_decaimiento", 0.80))
+        self.defecto_semilla_global: int | None = raw.get("defecto_semilla_global")
         self.inspeccion_pausa_s: float = float(raw.get("inspeccion_pausa_s", 1.0))
 
         # --- Fase 3: Voronoi recursivo + Market Auction (etapa de Inspeccion) ---
+        # Obsoletos (documentados, se conservan por compatibilidad de YAMLs):
         self.auction_defectivo_factor: float = float(raw.get("auction_defectivo_factor", 0.15))
         self.auction_sano_factor: float = float(raw.get("auction_sano_factor", 0.25))
         self.auction_profundidad_p: float = float(raw.get("auction_profundidad_p", 0.97))
+        # Nueva semantica: orden estricto padre->hijos, peso creciente por
+        # generacion y ajuste dinamico por resultado de inspeccion.
+        self.inspeccion_padre_antes_hijo: bool = bool(raw.get("inspeccion_padre_antes_hijo", True))
+        self.inspeccion_peso_generacion: float = float(raw.get("inspeccion_peso_generacion", 1.5))
+        self.inspeccion_factor_sano: float = float(raw.get("inspeccion_factor_sano", 1.5))
+        self.inspeccion_factor_defectivo: float = float(raw.get("inspeccion_factor_defectivo", 0.6))
 
         # Transicion (para modo hibrido: umbral de descubrimiento)
         trans = raw.get("transicion", {}) or {}
@@ -109,42 +130,88 @@ class Config:
         self.transicion_tiempo_sin_scouteo_s: float = float(
             trans.get("tiempo_sin_scouteo_s", 60.0))
 
+        # --- RL Training ---
+        rl = raw.get("rl", {}) or {}
+        rw = rl.get("reward", {}) or {}
+        self.rl_reward = {
+            "reward_nueva": float(rw.get("reward_nueva", 1.0)),
+            "reward_redundancia": float(rw.get("reward_redundancia", -0.1)),
+            "reward_colision_rr": float(rw.get("reward_colision_rr", -0.3)),
+            "reward_colision_pared": float(rw.get("reward_colision_pared", -0.1)),
+            "reward_tiempo": float(rw.get("reward_tiempo", -0.001)),
+            "reward_nueva_global": float(rw.get("reward_nueva_global", 0.5)),
+            "reward_tiempo_global": float(rw.get("reward_tiempo_global", -0.001)),
+            "alpha": float(rw.get("alpha", 0.6)),
+            "bonus_completar": float(rw.get("bonus_completar", 50.0)),
+            "castigo_timeout": float(rw.get("castigo_timeout", -50.0)),
+        }
+        # --- RL Hibrido (control en tiempo real en la GUI) ---
+        hib = rl.get("hibrido", {}) or {}
+        self.rl_hibrido_model: str = str(hib.get("model", "models/rl_20x20_10r/final"))
+        self.rl_hibrido_map_known: bool = bool(hib.get("map_known", True))
+        self.rl_hibrido_auto_assign: bool = bool(hib.get("auto_assign", True))
+        self.rl_hibrido_num_robots: int = int(hib.get("num_robots", 10))
+
+        hib_v2 = rl.get("hibrido_v2", {}) or {}
+        self.rl_hibrido_v2_model: str = str(hib_v2.get("model", "models/rl_v2/final"))
+        self.rl_hibrido_v2_map_known: bool = bool(hib_v2.get("map_known", True))
+        self.rl_hibrido_v2_auto_assign: bool = bool(hib_v2.get("auto_assign", True))
+        self.rl_hibrido_v2_num_robots: int = int(hib_v2.get("num_robots", 10))
+
+        self.rl_curriculum = rl.get("curriculum", [])
+        ppo = rl.get("ppo", {}) or {}
+        self.rl_ppo = {
+            "learning_rate": float(ppo.get("learning_rate", 3e-4)),
+            "n_steps": int(ppo.get("n_steps", 2048)),
+            "batch_size": int(ppo.get("batch_size", 64)),
+            "n_epochs": int(ppo.get("n_epochs", 10)),
+            "gamma": float(ppo.get("gamma", 0.99)),
+            "gae_lambda": float(ppo.get("gae_lambda", 0.95)),
+            "clip_range": float(ppo.get("clip_range", 0.2)),
+            "ent_coef": float(ppo.get("ent_coef", 0.01)),
+            "vf_coef": float(ppo.get("vf_coef", 0.5)),
+            "net_arch": ppo.get("net_arch", [256, 256]),
+        }
+
         self.cols = self.map_width // self.grid_size
         self.rows = self.map_height // self.grid_size
 
-    def _estrategia_activa(self):
-        """Devuelve la estrategia activa segun el modo de fase."""
-        if self.modo_fase == "exploracion":
+    def _estrategia_activa(self, etapa=None):
+        """Devuelve la estrategia activa segun el modo de simulacion.
+
+        - modo "dos_etapas": la estrategia depende de la etapa actual
+          (`etapa` "exploracion" o "inspeccion"). Si `etapa` no se pasa,
+          asume la fase de exploracion.
+        - modo "hibrido": una sola etapa, usa la estrategia hibrida.
+        """
+        if self.modo_fase == "dos_etapas":
+            if etapa == "inspeccion":
+                return self.estrategia_inspeccion
             return self.estrategia_exploracion
-        elif self.modo_fase == "inspeccion":
-            return self.estrategia_inspeccion
         elif self.modo_fase == "hibrido":
             return self.estrategia_hibrido
         return self.estrategia_exploracion
 
-    def es_exploracion(self):
-        """True si el modo activo es exploracion."""
-        return self.modo_fase == "exploracion"
-
-    def es_inspeccion(self):
-        """True si el modo activo es inspeccion."""
-        return self.modo_fase == "inspeccion"
+    def es_dos_etapas(self):
+        """True si el modo es de dos etapas (exploracion -> inspeccion)."""
+        return self.modo_fase == "dos_etapas"
 
     def es_hibrido(self):
-        """True si el modo activo es hibrido."""
+        """True si el modo activo es hibrido (una sola etapa)."""
         return self.modo_fase == "hibrido"
-
-    def es_dos_etapas(self):
-        """Deprecated: siempre False (compatibilidad con codigo existente)."""
-        return False
-
-    def modo_estrategia(self, estrategia=None):
-        """Deprecated: devuelve 'H' (compatibilidad con codigo existente)."""
-        return "H"
 
     def sync_strategy(self):
         """Sincroniza self.strategy con el modo activo (llamar tras cambiar modo)."""
         self.strategy = self._estrategia_activa()
+
+    def _normalizar_modo(self):
+        """Convierte el valor de modo_fase a los 2 modos actuales.
+
+        Modos antiguos ("exploracion", "inspeccion") dejan de existir como
+        modos independientes: pasan a la simulacion de dos etapas.
+        """
+        if self.modo_fase not in ("dos_etapas", "hibrido"):
+            self.modo_fase = "dos_etapas"
 
     def cargar_desde_archivo(self, path="sim_config.txt"):
         """Superpone valores guardados (clave=valor) sobre la configuracion."""
@@ -162,6 +229,7 @@ class Config:
         # Nuevo sistema de modos
         if "modo_fase" in data:
             self.modo_fase = data["modo_fase"]
+        self._normalizar_modo()
         if "estrategia_exploracion" in data:
             self.estrategia_exploracion = data["estrategia_exploracion"]
         if "estrategia_inspeccion" in data:
@@ -174,15 +242,16 @@ class Config:
         # Compatibilidad: si viene "strategy" viejo, mapear al modo correspondiente
         if "strategy" in data:
             old = data["strategy"]
-            if old in ESTRATEGIAS_EXPLORACION:
-                self.modo_fase = "exploracion"
-                self.estrategia_exploracion = old
-            elif old in ESTRATEGIAS_INSPECCION:
-                self.modo_fase = "inspeccion"
-                self.estrategia_inspeccion = old
-            elif old in ESTRATEGIAS_HIBRIDO:
+            if old in ESTRATEGIAS_HIBRIDO:
                 self.modo_fase = "hibrido"
                 self.estrategia_hibrido = old
+            elif old in ESTRATEGIAS_EXPLORACION:
+                self.modo_fase = "dos_etapas"
+                self.estrategia_exploracion = old
+            elif old in ESTRATEGIAS_INSPECCION:
+                self.modo_fase = "dos_etapas"
+                self.estrategia_inspeccion = old
+        self._normalizar_modo()
 
         self.sync_strategy()
 
@@ -200,7 +269,13 @@ class Config:
                     "dirigido_umbral_giro_deg",
                     "auction_defectivo_factor",
                     "auction_sano_factor",
-                    "auction_profundidad_p"):
+                    "auction_profundidad_p",
+                    "inspeccion_peso_generacion",
+                    "inspeccion_factor_sano",
+                    "inspeccion_factor_defectivo",
+                    "defecto_prob_ortogonal",
+                    "defecto_prob_diagonal",
+                    "defecto_decaimiento"):
             if key in data:
                 try:
                     setattr(self, key, float(data[key]))
@@ -208,7 +283,7 @@ class Config:
                     continue
 
         for key in ("frontier_min_size", "sample_candidates",
-                    "sample_per_cluster", "sample_targets"):
+                    "sample_per_cluster", "sample_targets", "defecto_num_blobs"):
             if key in data:
                 try:
                     setattr(self, key, int(data[key]))

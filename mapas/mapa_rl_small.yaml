@@ -1,0 +1,8 @@
+map_width: 200
+map_height: 200
+grid_size: 20
+num_robots: 3
+nombre: Mapa RL Small (10x10)
+descripcion: 'Mapa pequeno 10x10 para etapa 1 del curriculum RL.'
+walls: []
+defecto_num_blobs: 2

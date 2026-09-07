@@ -25,24 +25,4 @@ walls:
   width: 22
   height: 110
   angle: 0
-defecto_blobs:
-- cx: 328.7
-  cy: 269.6
-  radio: 32
-  semilla: 2300
-- cx: 327.6
-  cy: 50.6
-  radio: 32
-  semilla: 2301
-- cx: 55.6
-  cy: 359.9
-  radio: 32
-  semilla: 2302
-- cx: 341.4
-  cy: 136.9
-  radio: 32
-  semilla: 2303
-- cx: 326.8
-  cy: 354.2
-  radio: 32
-  semilla: 2304
+defecto_num_blobs: 5

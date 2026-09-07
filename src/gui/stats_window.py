@@ -191,6 +191,8 @@ class StatsWindow:
         self.ver_objetivos_var = tk.BooleanVar(value=self.sim.ver_objetivos)
         self.ver_intencion_var = tk.BooleanVar(value=self.sim.ver_intencion)
         self.ver_defectos_var = tk.BooleanVar(value=self.sim.ver_defectos)
+        self.ver_voronoi_var = tk.BooleanVar(value=self.sim.ver_voronoi)
+        self.ver_triangulacion_var = tk.BooleanVar(value=self.sim.ver_triangulacion)
         ttk.Checkbutton(vis_frame, text="Fronteras", variable=self.ver_fronteras_var,
                         command=self._aplicar_visual).pack(side="left", padx=2)
         ttk.Checkbutton(vis_frame, text="Objetivos", variable=self.ver_objetivos_var,
@@ -199,10 +201,14 @@ class StatsWindow:
                         command=self._aplicar_visual).pack(side="left", padx=2)
         ttk.Checkbutton(vis_frame, text="Defectos", variable=self.ver_defectos_var,
                         command=self._aplicar_visual).pack(side="left", padx=2)
+        ttk.Checkbutton(vis_frame, text="Voronoi", variable=self.ver_voronoi_var,
+                        command=self._aplicar_visual).pack(side="left", padx=2)
+        ttk.Checkbutton(vis_frame, text="Triangulacion", variable=self.ver_triangulacion_var,
+                        command=self._aplicar_visual).pack(side="left", padx=2)
 
         ttk.Separator(f, orient="horizontal").pack(fill="x", pady=8)
 
-        # --- Etapa y transicion (modo hibrido) ---
+        # --- Etapa y transicion (modo dos etapas) ---
         ttk.Label(f, text="Etapa:", font=("Arial", 10, "bold")).pack(anchor="w")
         etapa_frame = ttk.Frame(f)
         etapa_frame.pack(fill="x", pady=4)
@@ -212,7 +218,7 @@ class StatsWindow:
         self.force_boton = ttk.Button(etapa_frame, text="Transicionar a Inspeccion",
                                       command=self._forzar_inspeccion, state="disabled")
         self.force_boton.pack(side="left")
-        ttk.Label(f, text="Solo disponible en modo Hibrido (transicion automatica "
+        ttk.Label(f, text="Solo disponible en modo 'Dos etapas' (transicion automatica "
                           "Exploracion -> Inspeccion).",
                   font=("Arial", 8)).pack(anchor="w", pady=(2, 0))
         self._actualizar_force_boton()
@@ -245,6 +251,8 @@ class StatsWindow:
         ttk.Label(f, text="Atajos de teclado:", font=("Arial", 10, "bold")).pack(anchor="w")
         ttk.Label(f, text="R: Robot   P: Pared   B: Borrar   ESC: Volver a editor",
                   font=("Arial", 9)).pack(anchor="w", pady=2)
+        ttk.Label(f, text="V: Ver Voronoi (toggle)",
+                  font=("Arial", 9)).pack(anchor="w", pady=2)
 
         self._sync_params_from_cfg()
 
@@ -270,15 +278,21 @@ class StatsWindow:
         f = ttk.Frame(scroll_frame, padding=12)
         f.pack(fill="both", expand=True)
 
-        # --- Selector de modo de fase ---
-        ttk.Label(f, text="Modo de fase:", font=("Arial", 11, "bold")).pack(anchor="w")
+        # --- Selector de tipo de simulacion (2 opciones) ---
+        ttk.Label(f, text="Tipo de simulacion:", font=("Arial", 11, "bold")).pack(anchor="w")
         modo_frame = ttk.Frame(f)
         modo_frame.pack(fill="x", pady=4)
-        self.modo_var = tk.StringVar(value=self.sim.cfg.modo_fase)
+        self._modo_display = {
+            "dos_etapas": "Dos etapas: explora -> inspecciona",
+            "hibrido": "Hibrida (una etapa: explora + inspecciona)",
+        }
+        self._modo_interno = {v: k for k, v in self._modo_display.items()}
+        self.modo_var = tk.StringVar(
+            value=self._modo_display.get(self.sim.cfg.modo_fase, self.sim.cfg.modo_fase))
         self.modo_combo = ttk.Combobox(
             modo_frame, textvariable=self.modo_var,
-            values=["exploracion", "inspeccion", "hibrido"],
-            state="readonly", width=20)
+            values=list(self._modo_display.values()),
+            state="readonly", width=32)
         self.modo_combo.pack(side="left")
         self.modo_combo.bind("<<ComboboxSelected>>", self._cambiar_modo)
 
@@ -325,8 +339,9 @@ class StatsWindow:
         self.strategy_hib_combo.pack(side="left")
         self.strategy_hib_combo.bind("<<ComboboxSelected>>", self._cambiar_estrategia_hib)
 
-        # Aplicar estado inicial (habilitar/deshabilitar segun modo)
+        # Aplicar estado inicial de estrategias segun el modo
         self._actualizar_estado_dropdowns()
+        self._actualizar_etiquetas_estrategias()
 
         ttk.Separator(f, orient="horizontal").pack(fill="x", pady=8)
         ttk.Label(f, text="Los parametros se aplican a las estrategias que usan "
@@ -354,26 +369,30 @@ class StatsWindow:
 
         self._sync_params_from_cfg()
 
+    def _modo_actual(self):
+        """Devuelve el valor interno del modo segun el combo (display)."""
+        display = self.modo_var.get()
+        return self._modo_interno.get(display, self.sim.cfg.modo_fase)
+
     def _cambiar_modo(self, *_):
-        """Cambia el modo de fase y actualiza la estrategia activa."""
-        self.sim.cfg.modo_fase = self.modo_var.get()
+        """Cambia el tipo de simulacion y actualiza la estrategia activa."""
+        self.sim.cfg.modo_fase = self._modo_actual()
         self.sim.cfg.sync_strategy()
         self._actualizar_estado_dropdowns()
         self._actualizar_modo_info()
+        self._actualizar_force_boton()
         if self.sim.estado == "running":
             self.sim.planner = self.sim._crear_planner()
 
     def _cambiar_estrategia_exp(self, *_):
         self.sim.cfg.estrategia_exploracion = self.strategy_exp_var.get()
         self.sim.cfg.sync_strategy()
-        if self.sim.estado == "running" and self.sim.cfg.modo_fase == "exploracion":
+        if self.sim.estado == "running" and self.sim.cfg.modo_fase == "dos_etapas":
             self.sim.planner = self.sim._crear_planner()
 
     def _cambiar_estrategia_insp(self, *_):
         self.sim.cfg.estrategia_inspeccion = self.strategy_insp_var.get()
         self.sim.cfg.sync_strategy()
-        if self.sim.estado == "running" and self.sim.cfg.modo_fase == "inspeccion":
-            self.sim.planner = self.sim._crear_planner()
 
     def _cambiar_estrategia_hib(self, *_):
         self.sim.cfg.estrategia_hibrido = self.strategy_hib_var.get()
@@ -382,30 +401,49 @@ class StatsWindow:
             self.sim.planner = self.sim._crear_planner()
 
     def _actualizar_estado_dropdowns(self):
-        """Habilita/deshabilita los dropdowns segun el modo activo."""
-        modo = self.sim.cfg.modo_fase
-        self.strategy_exp_combo.config(
-            state="readonly" if modo == "exploracion" else "disabled")
-        self.strategy_insp_combo.config(
-            state="readonly" if modo == "inspeccion" else "disabled")
-        self.strategy_hib_combo.config(
-            state="readonly" if modo == "hibrido" else "disabled")
+        """Habilita/deshabilita los dropdowns de estrategia segun el modo.
+
+        Los marcos de estrategia siempre estan visibles; solo cambia el
+        estado de cada combobox:
+        - "dos_etapas": exploracion e inspeccion seleccionables; hibrida
+          desactivada.
+        - "hibrido":    solo hibrida seleccionable; exploracion e inspeccion
+          desactivadas.
+        """
+        if self.sim.cfg.modo_fase == "dos_etapas":
+            self.strategy_exp_combo.config(state="readonly")
+            self.strategy_insp_combo.config(state="readonly")
+            self.strategy_hib_combo.config(state="disabled")
+        else:
+            self.strategy_exp_combo.config(state="disabled")
+            self.strategy_insp_combo.config(state="disabled")
+            self.strategy_hib_combo.config(state="readonly")
 
     def _actualizar_modo_info(self):
         """Actualiza la label informativa del modo."""
         if not hasattr(self, "modo_info_label"):
             return
         modo = self.sim.cfg.modo_fase
-        if modo == "exploracion":
-            txt = "Solo exploracion (sin inspeccion)"
-            fg = "#88aaff"
-        elif modo == "inspeccion":
-            txt = "Solo inspeccion (requiere mapa pre-explorado)"
-            fg = "#88ff88"
-        else:
-            txt = "Exploracion + Inspeccion en una etapa"
+        if modo == "dos_etapas":
+            txt = "Exploracion -> Inspeccion (transicion dinamica)"
             fg = "#ffcc44"
+        else:
+            txt = "Una sola etapa: explora e inspecciona a la vez"
+            fg = "#d0a0ff"
         self.modo_info_label.config(text=txt, foreground=fg)
+
+    def _actualizar_etiquetas_estrategias(self):
+        """Actualiza las etiquetas de los marcos de estrategia segun el modo."""
+        if not hasattr(self, "_exp_frame"):
+            return
+        if self.sim.cfg.modo_fase == "dos_etapas":
+            self._exp_frame.config(text="Estrategia de Exploracion (fase 1)")
+            self._insp_frame.config(text="Estrategia de Inspeccion (fase 2)")
+            self._hib_frame.config(text="Estrategia Hibrida (solo en modo Hibrida)")
+        else:
+            self._exp_frame.config(text="Estrategia de Exploracion (solo en Dos etapas)")
+            self._insp_frame.config(text="Estrategia de Inspeccion (solo en Dos etapas)")
+            self._hib_frame.config(text="Estrategia Hibrida (una etapa)")
 
     def _build_param_section(self, parent, title, keys):
         ttk.Separator(parent, orient="horizontal").pack(fill="x", pady=8)
@@ -558,7 +596,9 @@ class StatsWindow:
             # Cargar modo y estrategias
             if "modo_fase" in data:
                 self.sim.cfg.modo_fase = data["modo_fase"]
-                self.modo_var.set(data["modo_fase"])
+                self.sim.cfg._normalizar_modo()
+                self.modo_var.set(self._modo_display.get(
+                    self.sim.cfg.modo_fase, self.sim.cfg.modo_fase))
             if "estrategia_exploracion" in data:
                 self.sim.cfg.estrategia_exploracion = data["estrategia_exploracion"]
                 self.strategy_exp_var.set(data["estrategia_exploracion"])
@@ -572,6 +612,8 @@ class StatsWindow:
             self.sim.cfg.sync_strategy()
             self._actualizar_estado_dropdowns()
             self._actualizar_modo_info()
+            self._actualizar_etiquetas_estrategias()
+            self._actualizar_force_boton()
 
             if self.sim.estado == "running":
                 self.sim.planner = self.sim._crear_planner()
@@ -616,18 +658,22 @@ class StatsWindow:
         self.sim.ver_intencion = self.ver_intencion_var.get()
         if hasattr(self, "ver_defectos_var"):
             self.sim.ver_defectos = self.ver_defectos_var.get()
+        if hasattr(self, "ver_voronoi_var"):
+            self.sim.ver_voronoi = self.ver_voronoi_var.get()
+        if hasattr(self, "ver_triangulacion_var"):
+            self.sim.ver_triangulacion = self.ver_triangulacion_var.get()
 
     def _forzar_inspeccion(self):
         self.sim.forzar_transicion_inspeccion()
         self._actualizar_force_boton()
 
     def _actualizar_force_boton(self):
-        """Habilita el boton de transicion solo en modo hibrido."""
+        """Habilita el boton de transicion solo en modo dos_etapas."""
         if not hasattr(self, "force_boton"):
             return
-        es_hibrido = self.sim.cfg.modo_fase == "hibrido"
+        es_dos_etapas = self.sim.cfg.modo_fase == "dos_etapas"
         en_marcha = self.sim.estado == "running" and not self.sim.transicionado
-        estado = "normal" if (es_hibrido and en_marcha) else "disabled"
+        estado = "normal" if (es_dos_etapas and en_marcha) else "disabled"
         self.force_boton.config(state=estado)
 
     def _pausar_sim(self):
@@ -669,7 +715,9 @@ class StatsWindow:
     def _actualizar_etapa_label(self):
         if not hasattr(self, "etapa_label"):
             return
-        etapa = self.sim.etapa
+        if self.sim.cfg.modo_fase == "hibrido":
+            self.etapa_label.config(text="Hibrida (una etapa)", foreground="#d0a0ff")
+            return
         if self.sim.transicionado:
             texto = "Inspeccion"
             fg = "#8affa0"
@@ -824,9 +872,12 @@ class StatsWindow:
         pct_total = 100.0 * (v + s + d) / total if total else 0
         tiempo = self.sim.tiempo_simulado
         fps = self.sim.fps_actual
-        estrategia = self.sim.cfg._estrategia_activa()
+        estrategia = self.sim.cfg._estrategia_activa(self.sim.etapa)
         modo = self.sim.cfg.modo_fase
-        pendientes = self.sim.planner.objetivos_pendientes if self.sim.planner else 0
+        if self.sim.planner is not None and hasattr(self.sim.planner, "objetivos_pendientes"):
+            pendientes = self.sim.planner.objetivos_pendientes
+        else:
+            pendientes = 0
         if self.sim.estado == "completado":
             resultado = (f"COMPLETADO: mapa al {pct_total:.1f}% en {self.sim.tiempo_final:.2f} s\n"
                          f"(no es necesario visitar todas las casillas)\n")
@@ -858,9 +909,19 @@ class StatsWindow:
                              f"defect={r.defectuosas_robot}")
         por_robot_txt = "\n".join(por_robot) if por_robot else "  (sin robots)"
 
+        # Para modo dos_etapas, mostrar ambas estrategias
+        if modo == "dos_etapas":
+            estrategia_display = ("exp:{} / ins:{}".format(
+                self.sim.cfg.estrategia_exploracion,
+                self.sim.cfg.estrategia_inspeccion))
+        else:
+            estrategia_display = estrategia
+
+        etapa_display = ("HIBRIDA (una etapa)" if modo == "hibrido"
+                     else self.sim.etapa.upper())
         texto = (
-            f"Estrategia:        {estrategia} [modo: {modo}]\n"
-            f"Etapa:             {self.sim.etapa.upper()}\n"
+            f"Estrategia:        {estrategia_display} [modo: {modo}]\n"
+            f"Etapa:             {etapa_display}\n"
             f"Tiempo simulado:   {tiempo:.2f} s\n"
             f"FPS:               {fps:.1f}\n"
             f"Pasos totales:     {self.sim.pasos_totales}\n"

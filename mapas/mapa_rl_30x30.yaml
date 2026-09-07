@@ -1,0 +1,38 @@
+map_width: 600
+map_height: 600
+grid_size: 20
+num_robots: 7
+nombre: Mapa RL 30x30 con Paredes
+descripcion: 'Grid 30x30 con corredores en serpentina (3 barreras verticales) para entrenamiento RL etapa 3.'
+walls:
+- x: 170
+  y: 160
+  width: 20
+  height: 220
+  angle: 0
+- x: 170
+  y: 460
+  width: 20
+  height: 80
+  angle: 0
+- x: 330
+  y: 440
+  width: 20
+  height: 220
+  angle: 0
+- x: 330
+  y: 120
+  width: 20
+  height: 80
+  angle: 0
+- x: 490
+  y: 240
+  width: 20
+  height: 220
+  angle: 0
+- x: 490
+  y: 500
+  width: 20
+  height: 80
+  angle: 0
+defecto_num_blobs: 4

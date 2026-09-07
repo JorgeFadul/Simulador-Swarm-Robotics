@@ -1,4 +1,4 @@
-import math
+﻿import math
 import numpy as np
 from ..core.config import Config
 from ..core.mundo import Mundo, SCOUTED, VISITED, DISCOVERED
@@ -67,6 +67,14 @@ class Robot:
         self.cola_tareas = []
         self.con_cola = False
 
+        # Estado de conduccion Boustrophedon (zigzag autonomo celda a celda).
+        # None = inactivo (se inicializa en el primer update con el mundo real).
+        # Dict con: modo ("avanzar"/"salto"/"perdido"), orientacion ("h"/"v"),
+        # dir (dr, dc), rumbo (angulo cardinal), pasada (+1/-1 lateral),
+        # objetivo_celda ((r, c) o None).
+        self.zigzag = None
+        self.celdas_visitadas = set()   # (r, c) celdas por las que paso el robot
+
         # Pausa de inspeccion (percusion): el robot se detiene sobre la celda
         # mientras "prueba" antes de registrar el resultado (etapa 2E).
         self.inspeccionando = False
@@ -79,6 +87,8 @@ class Robot:
         strat = cfg._estrategia_activa()
         if strat in ("Random Walk", "Random Walk Hibrido"):
             self._elegir_nuevo_recorrido()
+        elif strat == "Boustrophedon":
+            self.zigzag = {"modo": "perdido"}
         else:
             self._esperar_objetivo()
 
@@ -325,7 +335,7 @@ class Robot:
             self.celda_probando = None
             self.goal_alcanzado = True
             self.timed_out = False
-            strat = self.cfg._estrategia_activa()
+            strat = self.cfg._estrategia_activa(etapa=mundo.etapa)
             if strat in ("Random Walk", "Random Walk Hibrido"):
                 self._elegir_nuevo_recorrido()
             else:
@@ -433,15 +443,336 @@ class Robot:
     def _decide_inspeccion_o_rumbo(self, mundo):
         """Al final de un tramo de random walk: inspecciona si aplica, luego
         elige un nuevo rumbo aleatorio."""
-        strat = self.cfg._estrategia_activa()
+        strat = self.cfg._estrategia_activa(etapa=mundo.etapa)
         hacer_inspeccion = (
             strat == "Random Walk Hibrido" or
-            (strat == "Random Walk" and self.cfg.modo_fase == "inspeccion")
+            (strat == "Random Walk" and mundo.etapa == "inspeccion")
         )
         if hacer_inspeccion:
             if self._iniciar_inspeccion(mundo):
                 return
         self._elegir_nuevo_recorrido()
+
+    def _celda_actual(self, mundo):
+        gs = mundo.cfg.grid_size
+        return int(self.y // gs), int(self.x // gs)
+
+    def _angulo_para(self, dr, dc):
+        return math.atan2(dr, dc)
+
+    def _celda_practicable(self, mundo, r, c):
+        """True si el robot puede intentar ir a la celda (r, c).
+
+        Restriccion de ceguera: solo una pared DISCOVERED bloquea. Una pared
+        aun no descubierta se trata como transitable: el robot intenta
+        avanzar, la choca fisicamente, la descubre y en el siguiente turno
+        decide el salto (asi "encuentra la pared" en vez de adivinarla).
+        Una celda ya visitada por este robot en el zigzag tambien se bloquea
+        para evitar retroceder por un area ya barrida."""
+        if not (0 <= r < mundo.rows and 0 <= c < mundo.cols):
+            return False
+        if (r, c) in self.celdas_visitadas:
+            return False
+        if mundo.grid[r, c] == 1:
+            return mundo.explored[r, c] != DISCOVERED
+        gs = mundo.cfg.grid_size
+        for o in mundo.robots:
+            if o is self:
+                continue
+            if int(o.y // gs) == r and int(o.x // gs) == c:
+                return False
+        return True
+
+    def _contar_borde_libre(self, mundo, r, c, dr, dc):
+        """Cuantas celdas no visitadas y practicables consecutivas hay desde
+        (r, c) en (dr, dc). Usado para medir el pasillo al orientar el zigzag."""
+        largo = 0
+        nr, nc = r, c
+        while self._celda_practicable(mundo, nr, nc):
+            largo += 1
+            nr += dr
+            nc += dc
+        return largo
+
+    def _celda_alcanzada(self, celda, mundo):
+        if celda is None:
+            return False
+        r, c = celda
+        gs = mundo.cfg.grid_size
+        if int(self.y // gs) == r and int(self.x // gs) == c:
+            return True
+        cx = c * gs + gs / 2
+        cy = r * gs + gs / 2
+        return math.hypot(cx - self.x, cy - self.y) <= self.goal_reached_radius
+
+    def _celda_visitada(self, mundo, r, c):
+        """True si la celda ya fue pisada por este robot en la sesion actual."""
+        return (r, c) in self.celdas_visitadas
+
+    def _lateral_disponible(self, mundo, r, c, zz):
+        """True si al menos un sentido lateral (pasada) tiene celda no visitada
+        y practicable."""
+        for paso in (zz["pasada"], -zz["pasada"]):
+            if zz["orientacion"] == "h":
+                nr, nc = r + paso, c
+            else:
+                nr, nc = r, c + paso
+            if self._celda_practicable(mundo, nr, nc):
+                return True
+        return False
+
+    def _iniciar_zigzag(self, mundo):
+        """Elige la orientacion del barrido y arranca el zigzag.
+
+        Solo considera celdas no visitadas al medir pasillos. La "pasada"
+        lateral (sentido del salto perpendicular) apunta hacia donde hay mas
+        area contigua sin visitar. Si no hay por donde moverse, queda
+        "perdido" y se rescata hacia una casilla vista cercana."""
+        r, c = self._celda_actual(mundo)
+        self.celdas_visitadas.add((r, c))
+        dirs = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+        largos = [self._contar_borde_libre(mundo, r + dr, c + dc, dr, dc)
+                  for dr, dc in dirs]
+        mejor = max(largos)
+        if mejor <= 0:
+            self.zigzag = {"modo": "perdido", "orientacion": "h",
+                           "dir": (0, 1), "rumbo": 0.0, "pasada": 1,
+                           "objetivo_celda": None}
+            return
+        candidatos = [dirs[i] for i, l in enumerate(largos) if l == mejor]
+        dir_avance = candidatos[int(self.rng.integers(len(candidatos)))]
+        if dir_avance[0] == 0:
+            p1, p2 = (1, 0), (-1, 0)
+            orientacion = "h"
+        else:
+            p1, p2 = (0, 1), (0, -1)
+            orientacion = "v"
+        l1 = self._contar_borde_libre(mundo, r + p1[0], c + p1[1], p1[0], p1[1])
+        l2 = self._contar_borde_libre(mundo, r + p2[0], c + p2[1], p2[0], p2[1])
+        pasada = 1 if l1 >= l2 else -1
+        self.zigzag = {
+            "modo": "avanzar", "orientacion": orientacion,
+            "dir": dir_avance, "rumbo": self._angulo_para(*dir_avance),
+            "pasada": pasada, "objetivo_celda": None,
+        }
+        self._iniciar_giro(self.zigzag["rumbo"])
+
+    def _candidata_salto(self, mundo, r, c, zz):
+        """Celda lateral (perpendicular a la marcha) a la que saltar.
+
+        Prueba primero el sentido de la pasada actual y luego el opuesto.
+        Devuelve (r, c) o None si ambos lados estan bloqueados (encerrado)."""
+        for paso in (zz["pasada"], -zz["pasada"]):
+            if zz["orientacion"] == "h":
+                nr, nc = r + paso, c
+            else:
+                nr, nc = r, c + paso
+            if self._celda_practicable(mundo, nr, nc):
+                zz["pasada"] = paso
+                return (nr, nc)
+        return None
+
+    def _casillas_reclamadas(self, mundo):
+        """Celulas que otros robots ya "tienen en su plan" (rescate en curso o
+        celda de salto): (r, c) del goal de rescate o del objetivo_celda de
+        salto de cada robot Boustrophedon. Estas zonas son de baja prioridad
+        para este robot y solo se usan como ultimo recurso."""
+        reclamadas = set()
+        gs = mundo.cfg.grid_size
+        for o in mundo.robots:
+            if o is self:
+                continue
+            zz = getattr(o, "zigzag", None)
+            if zz is not None and zz.get("modo") == "salto" and zz.get("objetivo_celda"):
+                reclamadas.add(zz["objetivo_celda"])
+            if o.goal_mode and not o.goal_alcanzado and o.goal is not None:
+                reclamadas.add((int(o.goal[1] // gs), int(o.goal[0] // gs)))
+        return reclamadas
+
+    def _casilla_vista_mas_cercana(self, mundo):
+        """Busca la casilla vista (SCOUTED, aun no visitada y no en
+        celdas_visitadas) mas cercana que sea alcanzable con ruta.
+
+        Prefiere casillas que ningun otro robot tenga ya como objetivo de su
+        plan (evita duplicar el area barrida). Si no queda ninguna libre,
+        cae a las ya reclamadas por otros. Devuelve (x, y, ruta) o None."""
+        idx = np.argwhere(mundo.explored == SCOUTED)
+        if len(idx) == 0:
+            return None
+        gs = mundo.cfg.grid_size
+        r_act, c_act = self._celda_actual(mundo)
+        reclamadas = self._casillas_reclamadas(mundo)
+
+        cx = idx[:, 1] * gs + gs / 2
+        cy = idx[:, 0] * gs + gs / 2
+        d = np.hypot(cx - self.x, cy - self.y)
+        orden = np.argsort(d)[:60]
+
+        def candidata(r0, c0):
+            return (r0, c0) not in self.celdas_visitadas and not (r0 == r_act and c0 == c_act)
+
+        def primera_por(usar_reclamadas):
+            for i in orden:
+                r0, c0 = int(idx[i][0]), int(idx[i][1])
+                if not candidata(r0, c0):
+                    continue
+                es_reclamada = (r0, c0) in reclamadas
+                if usar_reclamadas != es_reclamada:
+                    continue
+                x = c0 * gs + gs / 2
+                y = r0 * gs + gs / 2
+                ruta = encontrar_ruta(mundo, self.x, self.y, x, y)
+                if ruta:
+                    return (x, y, ruta)
+            return None
+
+        res = primera_por(False)
+        if res is None:
+            res = primera_por(True)
+        return res
+
+    def _fijar_objetivo_con_ruta(self, x, y, ruta, mundo):
+        """Fija un objetivo propio (rescate del zigzag) sin pasar por el
+        asignador del planificador. Similar a asignar_objetivo pero con ruta
+        ya calculada."""
+        self.goal = (float(x), float(y))
+        self.goal_mode = True
+        self.goal_alcanzado = False
+        self._goal_timer = 0.0
+        self.timed_out = False
+        self.ruta = ruta
+        self._ult_pos = (self.x, self.y)
+        self._sin_avance = 0.0
+        largo = sum(
+            math.hypot(self.ruta[i][0] - self.ruta[i - 1][0],
+                       self.ruta[i][1] - self.ruta[i - 1][1])
+            for i in range(1, len(self.ruta))
+        )
+        largo += math.hypot(x - self.ruta[-1][0], y - self.ruta[-1][1])
+        self.goal_timeout = max(self.cfg.goal_timeout_s,
+                                largo / max(self.max_speed, 1e-6) * 3.0)
+
+    def _intentar_rescate(self, mundo):
+        """El robot se encerro: busca la casilla vista mas cercana no
+        visitada y se reubica en ella (goal_mode). Al llegar, limpia
+        celdas_visitadas y reinicia el zigzag."""
+        res = self._casilla_vista_mas_cercana(mundo)
+        if res is None:
+            self._frenar()
+            return False
+        x, y, ruta = res
+        self._fijar_objetivo_con_ruta(x, y, ruta, mundo)
+        self.zigzag["modo"] = "perdido"
+        self.zigzag["objetivo_celda"] = None
+        return True
+
+    def _avanzar_recto(self, rumbo, dt, mundo, rep_dx, rep_dy, has_obs,
+                       colision_inminente):
+        """Conduce en linea recta hacia el rumbo cardinal con evitacion
+        reactiva. La pared frontal desconocida la detiene la fisica del
+        update (choque -> descubrir_pared_frontal)."""
+        destino = rumbo
+        if has_obs:
+            gdx, gdy = math.cos(rumbo), math.sin(rumbo)
+            dot = gdx * rep_dx + gdy * rep_dy
+            if colision_inminente:
+                w = 0.0 if dot < 0.0 else self.cfg.dirigido_peso_evasion_imminente
+            elif dot < -0.15:
+                w = self.cfg.dirigido_peso_evasion_fuerte
+            elif dot < 0.3:
+                w = self.cfg.dirigido_peso_evasion_suave
+            else:
+                w = 1.0
+            destino = math.atan2(w * gdy + (1.0 - w) * rep_dy,
+                                 w * gdx + (1.0 - w) * rep_dx)
+        elif colision_inminente:
+            destino = self.angle + math.radians(45)
+
+        diff = self._diferencia_angular(destino, self.angle)
+        umbral = math.radians(self.cfg.dirigido_umbral_giro_deg)
+        if abs(diff) <= umbral:
+            self.omega = 0.0
+            self.angle = destino
+        else:
+            self.omega = math.copysign(self.turn_speed, diff)
+            self.angle += self.omega * dt
+            self.angle = math.atan2(math.sin(self.angle), math.cos(self.angle))
+
+        alineado = max(0.0, math.cos(self._diferencia_angular(destino, self.angle)))
+        self.speed = self.max_speed * (self.cfg.dirigido_avance_min
+                                       + (1.0 - self.cfg.dirigido_avance_min) * alineado)
+        self.target_speed = self.speed
+        self.target_angle = destino
+        self.state = self.MOVING
+        self.vx = math.cos(self.angle) * self.speed
+        self.vy = math.sin(self.angle) * self.speed
+
+    def _actualizar_boustrophedon(self, dt, mundo, rep_dx, rep_dy, has_obs,
+                                  colision_inminente):
+        """Motor de conduccion del zigzag Boustrophedon (celda a celda).
+
+        - "avanzar": apunta a la direccion de barrido; si la celda frontal no
+          es practicable (pared conocida u otro robot) salta lateralmente.
+        - "salto":   gira 90 grados hacia la celda lateral y al alcanzarla
+          invierte la marcha (zigzag).
+        - "perdido": frontal y ambos laterales bloqueados: se reubica en la
+          casilla vista mas cercana y reinicia el patron.
+        """
+        if self.goal_alcanzado:
+            self.goal_alcanzado = False
+            self.goal = None
+            self.goal_mode = False
+            self.ruta = []
+            self.zigzag = None
+            self.celdas_visitadas = set()
+        if self.zigzag is None:
+            self._iniciar_zigzag(mundo)
+        if self.zigzag["modo"] == "perdido":
+            self._intentar_rescate(mundo)
+            return
+
+        zz = self.zigzag
+
+        if self.state == self.ROTATING:
+            self.angle += self.omega * dt
+            self.angle = math.atan2(math.sin(self.angle), math.cos(self.angle))
+            diff = self._diferencia_angular(self.target_angle, self.angle)
+            if abs(diff) <= self.turn_threshold:
+                self.angle = self.target_angle
+                self.state = self.MOVING
+                self._poner_en_marcha()
+            return
+
+        r, c = self._celda_actual(mundo)
+        self.celdas_visitadas.add((r, c))
+
+        if zz["modo"] == "salto":
+            if self._celda_alcanzada(zz["objetivo_celda"], mundo):
+                zz["dir"] = (-zz["dir"][0], -zz["dir"][1])
+                zz["rumbo"] = self._angulo_para(*zz["dir"])
+                zz["modo"] = "avanzar"
+                zz["objetivo_celda"] = None
+                self._iniciar_giro(zz["rumbo"])
+            else:
+                self._avanzar_recto(zz["rumbo"], dt, mundo, rep_dx, rep_dy,
+                                    has_obs, colision_inminente)
+            return
+
+        dr, dc = zz["dir"]
+        nr, nc = r + dr, c + dc
+        if self._celda_practicable(mundo, nr, nc):
+            self._avanzar_recto(zz["rumbo"], dt, mundo, rep_dx, rep_dy,
+                                has_obs, colision_inminente)
+        else:
+            lateral = self._candidata_salto(mundo, r, c, zz)
+            if lateral is not None:
+                zz["modo"] = "salto"
+                zz["objetivo_celda"] = lateral
+                zz["rumbo"] = self._angulo_para(lateral[0] - r, lateral[1] - c)
+                self._iniciar_giro(zz["rumbo"])
+            else:
+                zz["modo"] = "perdido"
+                self._intentar_rescate(mundo)
 
     def _dirigir_hacia_objetivo(self, dt, mundo, rep_dx, rep_dy, has_obs, colision_inminente):
         """Movimiento dirigido continuo (tipo diferencial).
@@ -471,7 +802,7 @@ class Robot:
                 # se detiene un segundo "probando" la celda (percusion) antes de
                 # registrar el resultado. Fuera de la etapa de Inspeccion, la
                 # meta dirigida se da por alcanzada al llegar.
-                if mundo.etapa == "inspeccion":
+                if mundo.etapa == "inspeccion" or self.cfg.modo_fase == "hibrido":
                     self._iniciar_inspeccion(mundo)
                 else:
                     self.goal_alcanzado = True
@@ -546,7 +877,7 @@ class Robot:
         if (not self.inspeccionando and self.necesita_objetivo and self.cola_tareas):
             self._consumir_de_cola(mundo)
 
-        strat = self.cfg._estrategia_activa()
+        strat = self.cfg._estrategia_activa(etapa=mundo.etapa)
         if self.inspeccionando:
             # Pausa de percusion: el robot se queda detenido sobre la celda que
             # esta probando. No avanza ni se le asigna otra meta hasta terminar.
@@ -564,6 +895,8 @@ class Robot:
                 self._esperar_objetivo()
             else:
                 self._dirigir_hacia_objetivo(dt, mundo, rep_dx, rep_dy, has_obs, colision_inminente)
+        elif strat == "Boustrophedon":
+            self._actualizar_boustrophedon(dt, mundo, rep_dx, rep_dy, has_obs, colision_inminente)
         elif strat in ("Random Walk", "Random Walk Hibrido"):
             self._actualizar_random_walk(dt, mundo, hay_peligro, has_obs, rep_dx, rep_dy)
         else:
@@ -601,11 +934,12 @@ class Robot:
                 if nuevas:
                     self.visitadas_robot += nuevas
                     self._sincronizar_area_visitada(mundo)
-                    # Inspeccion al visitar: en 1E-H se inspecciona durante la
-                    # exploracion; en 2E solo en la etapa de Inspeccion (para no
-                    # gastar energia de percusion antes de tiempo).
+                    # Inspeccion al visitar: en modo hibrido (una sola etapa) se
+                    # inspecciona durante toda la simulacion; en dos etapas solo
+                    # en la etapa de Inspeccion (para no gastar energia de
+                    # percusion antes de tiempo).
                     if self.cfg.inspeccionar_al_visitar and (
-                            mundo.etapa == "inspeccion"):
+                            mundo.etapa == "inspeccion" or self.cfg.modo_fase == "hibrido"):
                         self.inspeccionar_actual(mundo)
 
         exp_radius = self.detection_radius * self.cfg.exploration_radius_multiplier

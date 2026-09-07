@@ -45,8 +45,4 @@ walls:
   width: 24
   height: 24
   angle: 0
-defecto_blobs:
-- cx: 206.7
-  cy: 174.8
-  radio: 35
-  semilla: 2200
+defecto_num_blobs: 4

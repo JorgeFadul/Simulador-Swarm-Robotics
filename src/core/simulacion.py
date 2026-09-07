@@ -44,6 +44,8 @@ class Simulacion:
         self.ver_objetivos = True
         self.ver_intencion = True
         self.ver_defectos = False
+        self.ver_voronoi = True
+        self.ver_triangulacion = False
         # Estado de fase
         self.etapa = "exploracion"
         self._total_descubierto_previo = 0
@@ -53,11 +55,11 @@ class Simulacion:
 
     @property
     def transicionado(self):
-        """True si ya se transiciono a la etapa de Inspeccion (modo hibrido)."""
+        """True si ya se transiciono a la etapa de Inspeccion (modo dos_etapas)."""
         return self.etapa == "inspeccion"
 
     def cambiar_a_inspeccion(self):
-        """Transicion a la etapa de Inspeccion (modo hibrido)."""
+        """Transicion a la etapa de Inspeccion (modo dos_etapas)."""
         if self.mundo is None:
             return
         self.etapa = "inspeccion"
@@ -78,35 +80,62 @@ class Simulacion:
         self._ultimo_nuevo_inspeccionado = 0.0
 
     def _crear_planner(self):
-        """Crea el planner segun el modo de fase y la estrategia activa."""
-        modo = self.cfg.modo_fase
+        """Crea el planner segun el modo de simulacion y la estrategia activa.
 
-        if modo == "exploracion":
+        - "dos_etapas": planner de exploracion (fase inicial) basado en
+          `estrategia_exploracion`. El planner de inspeccion se crea en la
+          transicion a la etapa de inspeccion (ver `_crear_planner_inspeccion`).
+        - "hibrido": una sola etapa, estrategia hibrida (Random Walk Hibrido no
+          usa planner; los robots exploran e inspeccionan de forma simultanea).
+        """
+        if self.cfg.modo_fase == "dos_etapas":
             strat = self.cfg.estrategia_exploracion
-            if strat == "Random Walk":
-                return None  # Random Walk no usa planner
-            if strat in ("Frontier Based", "Sample Based", "Hybrid Based",
-                         "Boustrophedon"):
+            if strat in ("Random Walk", "Boustrophedon"):
+                return None  # sin planner: movimiento autonomo del robot
+            if strat in ("Frontier Based", "Sample Based", "Hybrid Based"):
                 return ExplorationPlanner(self.cfg, strat, self.rng)
             # RL Exploracion: por ahora retorna None (placeholder)
             return None
 
-        elif modo == "inspeccion":
-            strat = self.cfg.estrategia_inspeccion
-            if strat == "Voronoi":
-                return InspeccionVoronoi(self.cfg, self.rng)
-            if strat == "Boustrophedon Inspeccion":
-                return InspectionPlanner(self.cfg, self.rng)
-            # RL Inspeccion: por ahora retorna None (placeholder)
-            return None
+        # Modo hibrido: RL Hibrido usa un controlador RL como planner
+        if self.cfg.estrategia_hibrido in ("RL Hibrido", "RL Hibrido V2"):
+            # El controlador usa la geometria del mundo actual.
+            # El modelo debe haber sido entrenado con los mismos dimensiones.
+            is_v2 = self.cfg.estrategia_hibrido == "RL Hibrido V2"
+            if is_v2:
+                model_path = getattr(self.cfg, "rl_hibrido_v2_model", "models/rl_v2/final")
+                map_known = getattr(self.cfg, "rl_hibrido_v2_map_known", True)
+                auto_assign = getattr(self.cfg, "rl_hibrido_v2_auto_assign", True)
+                num_robots = getattr(self.cfg, "rl_hibrido_v2_num_robots", 10)
+                label = "RL Hibrido V2"
+            else:
+                model_path = getattr(self.cfg, "rl_hibrido_model", "models/rl_hibrido_v1/final")
+                map_known = getattr(self.cfg, "rl_hibrido_map_known", True)
+                auto_assign = getattr(self.cfg, "rl_hibrido_auto_assign", True)
+                num_robots = getattr(self.cfg, "rl_hibrido_num_robots", 10)
+                label = "RL Hibrido"
+            try:
+                from ..rl.controller import RLHibridoController
+                return RLHibridoController(
+                    self.cfg,
+                    model_path=model_path,
+                    map_known=map_known,
+                    auto_assign=auto_assign,
+                )
+            except Exception as e:
+                print(f"[{label}] No se pudo cargar el modelo: {e}")
+                return None
+        # Las demas estrategias hibridas (p.ej. Random Walk Hibrido) no usan planner
+        return None
 
-        elif modo == "hibrido":
-            strat = self.cfg.estrategia_hibrido
-            if strat == "Random Walk Hibrido":
-                return None  # Random Walk hibrido: world.etapa maneja inspeccion
-            # RL Hibrido: placeholder
-            return None
-
+    def _crear_planner_inspeccion(self):
+        """Crea el planner de inspeccion segun `estrategia_inspeccion`."""
+        strat = self.cfg.estrategia_inspeccion
+        if strat == "Voronoi":
+            return InspeccionVoronoi(self.cfg, self.rng)
+        if strat == "Boustrophedon Inspeccion":
+            return InspectionPlanner(self.cfg, self.rng)
+        # RL Inspeccion u otros: por ahora retorna None (placeholder)
         return None
 
     def _actualizar_titulo(self):
@@ -135,27 +164,12 @@ class Simulacion:
         self._ultimo_nuevo_inspeccionado = 0.0
         self.planner_inspeccion = None
 
-        modo = self.cfg.modo_fase
         for r in self.mundo.robots:
             r.reiniciar_exploracion()
             r.reiniciar_objetivo()
             r.reiniciar_energia()
-            # Modo inspeccion: pre-explorar el entorno del robot
-            if modo == "inspeccion":
-                exp_radius = r.detection_radius * self.cfg.exploration_radius_multiplier
-                s, p = self.mundo.explorar_desde(r.x, r.y, exp_radius)
-                r.scouteadas_robot += s
-                r.paredes_robot += p
-                r._explorar_desde_propio(self.mundo, exp_radius)
 
         self.planner = self._crear_planner()
-
-        # Modo inspeccion: crear planner de inspeccion directamente
-        if modo == "inspeccion":
-            self.planner_inspeccion = self.planner
-            self.planner = None
-            self.etapa = "inspeccion"
-            self.mundo.etapa = "inspeccion"
 
         self.tiempo_simulado = 0.0
         self.pasos_totales = 0
@@ -171,19 +185,17 @@ class Simulacion:
             self.mundo.robots.append(robot)
 
     def _termino(self, mundo):
-        """Condicion de fin de la simulacion segun el modo de fase."""
+        """Condicion de fin de la simulacion segun el modo."""
         modo = self.cfg.modo_fase
 
-        if modo == "exploracion":
-            return self._termino_exploracion(mundo)
-        elif modo == "inspeccion":
-            return self._termino_inspeccion(mundo)
+        if modo == "dos_etapas":
+            return self._termino_dos_etapas(mundo)
         elif modo == "hibrido":
             return self._termino_hibrido(mundo)
-        return False
+        return self._termino_dos_etapas(mundo)
 
     def _termino_exploracion(self, mundo):
-        """Modo exploracion: termina por meta de descubrimiento o estancamiento."""
+        """Fase de exploracion: termina por meta de descubrimiento o estancamiento."""
         if mundo.porcentaje_descubierto >= self.cfg.exploration_goal:
             return True
         # Random Walk (sin planner): solo por meta de descubrimiento
@@ -203,25 +215,20 @@ class Simulacion:
         return int(_celdas_frontera(mundo).sum()) == 0
 
     def _termino_inspeccion(self, mundo):
-        """Modo inspeccion: termina por inspeccion completa o estancamiento."""
+        """Fase de inspeccion: termina por inspeccion completa o estancamiento."""
         if mundo.inspeccion_completa():
             return True
         if (self.tiempo_simulado - self._ultimo_nuevo_inspeccionado > 30):
             return True
         return False
 
-    def _termino_hibrido(self, mundo):
-        """Modo hibrido: termina cuando no quedan celdas por ver/visitar/inspeccionar.
+    def _termino_dos_etapas(self, mundo):
+        """Modo dos etapas: termina cuando ambas etapas quedan completas.
 
-        Para Random Walk Hibrido: basta con `inspeccion_completa()` (implica
-        que todas las celdas fueron vistas, visitadas e inspeccionadas).
-        Para otras estrategias hibridas: requiere exploracion completada
-        Y inspeccion completada.
+        La exploracion usa `estrategia_exploracion` y la inspeccion usa
+        `estrategia_inspeccion`, con transicion dinamica entre etapas.
+        La terminacion requiere ambas completadas.
         """
-        strat = self.cfg.estrategia_hibrido
-        if strat == "Random Walk Hibrido":
-            return mundo.inspeccion_completa()
-        # Otras estrategias hibridas: exploracion + inspeccion
         exploracion_ok = mundo.porcentaje_descubierto >= self.cfg.exploration_goal
         if not exploracion_ok and self.planner is not None:
             if self.planner._alguna_vez_hubo_fronteras:
@@ -238,9 +245,27 @@ class Simulacion:
                 inspeccion_ok = True
         return exploracion_ok and inspeccion_ok
 
+    def _termino_hibrido(self, mundo):
+        """Modo hibrido (una sola etapa): termina cuando se descubrio lo
+        suficiente y se inspecciono todo. La exploracion y la inspeccion
+        ocurren a la vez.
+        """
+        exploracion_ok = mundo.porcentaje_descubierto >= self.cfg.exploration_goal
+        if not exploracion_ok and self.planner is not None:
+            if getattr(self.planner, "_alguna_vez_hubo_fronteras", False):
+                if (self._ultimo_nuevo_descubrimiento > 0 and
+                        self.tiempo_simulado - self._ultimo_nuevo_descubrimiento >
+                        self.cfg.transicion_tiempo_sin_scouteo_s):
+                    exploracion_ok = True
+        inspeccion_ok = mundo.inspeccion_completa()
+        if not inspeccion_ok:
+            if (self.tiempo_simulado - self._ultimo_nuevo_inspeccionado > 30):
+                inspeccion_ok = True
+        return exploracion_ok and inspeccion_ok
+
     def _verificar_transicion(self, mundo):
-        """Verifica transicion de exploracion a inspeccion (solo modo hibrido)."""
-        if self.cfg.modo_fase != "hibrido" or self.etapa == "inspeccion":
+        """Verifica transicion de exploracion a inspeccion (modo dos_etapas)."""
+        if self.cfg.modo_fase != "dos_etapas" or self.etapa == "inspeccion":
             return False
         ahora = self.tiempo_simulado
         total = mundo._scouteadas + mundo._visitadas + mundo._paredes_vistas
@@ -262,10 +287,18 @@ class Simulacion:
         return False
 
     def forzar_transicion_inspeccion(self):
-        """Transicion manual a la etapa de Inspeccion (modo hibrido)."""
-        if self.cfg.modo_fase != "hibrido" or self.etapa == "inspeccion":
+        """Transicion manual a la etapa de Inspeccion (modo dos_etapas)."""
+        if self.cfg.modo_fase != "dos_etapas" or self.etapa == "inspeccion":
             return
         self.cambiar_a_inspeccion()
+        # Crear planner de inspeccion basado en la estrategia seleccionada
+        self.planner_inspeccion = self._crear_planner_inspeccion()
+        self.planner = None
+        # Limpiar objetivos actuales de los robots
+        for r in self.mundo.robots:
+            r.goal = None
+            r.ruta = []
+            r.goal_alcanzado = False
 
     def step(self):
         if self.estado != "running" or not self.mundo:
@@ -278,20 +311,31 @@ class Simulacion:
 
         modo = self.cfg.modo_fase
 
-        # Modo hibrido: verificar transicion exploracion -> inspeccion
-        if modo == "hibrido":
+        # Modo dos_etapas: verificar transicion exploracion -> inspeccion
+        if modo == "dos_etapas":
             if self._verificar_transicion(m):
                 self.planner = None
-                self.planner_inspeccion = InspeccionVoronoi(self.cfg, self.rng)
+                # Crear planner de inspeccion basado en la estrategia seleccionada
+                self.planner_inspeccion = self._crear_planner_inspeccion()
+                # Limpiar objetivos actuales de los robots para que la nueva
+                # planner de inspeccion pueda asignar nuevos objetivos
+                for r in m.robots:
+                    r.goal = None
+                    r.ruta = []
+                    r.goal_alcanzado = False
 
         # Actualizar planners segun modo
         if self.planner_inspeccion is not None and (
-                (modo == "hibrido" and self.etapa == "inspeccion") or
-                modo == "inspeccion"):
+                (modo == "dos_etapas" and self.etapa == "inspeccion")):
             self.planner_inspeccion.actualizar(m)
         elif self.planner:
-            if modo in ("exploracion", "hibrido"):
+            if modo == "dos_etapas":
                 self.planner.actualizar(m, self.tiempo_simulado)
+            elif modo == "hibrido":
+                # El controlador RL (o la estrategia hibrida con planner) se
+                # actualiza cada ciclo
+                if hasattr(self.planner, "actualizar"):
+                    self.planner.actualizar(m)
 
         m.update(0.05)
         self.tiempo_simulado += 0.05
@@ -309,6 +353,9 @@ class Simulacion:
             self._ultimo_nuevo_inspeccionado = self.tiempo_simulado
 
     def manejar_evento(self, event):
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_v:
+            self.ver_voronoi = not self.ver_voronoi
+
         if self.estado != "edicion":
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                 self.estado = "edicion"
@@ -391,10 +438,13 @@ class Simulacion:
         if self.headless or not self.mundo or self.screen is None or self.renderer is None:
             return
         self.renderer.draw(self.mundo, self.estado, plan=self.planner,
+                           plan_inspeccion=self.planner_inspeccion,
                            ver_fronteras=self.ver_fronteras,
                            ver_objetivos=self.ver_objetivos,
                            ver_intencion=self.ver_intencion,
-                           ver_defectos=self.ver_defectos)
+                           ver_defectos=self.ver_defectos,
+                           ver_voronoi=self.ver_voronoi,
+                           ver_triangulacion=self.ver_triangulacion)
         self._draw_mode_hud()
         self._actualizar_titulo()
         pygame.display.flip()
@@ -420,26 +470,24 @@ class Simulacion:
         fuente = pygame.font.SysFont("Arial", 14)
         pct = self.mundo.porcentaje_descubierto * 100.0
         modo = self.cfg.modo_fase
-        strat = self.cfg._estrategia_activa()
+        strat = self.cfg._estrategia_activa(self.etapa)
 
         if self.estado == "completado":
             msg = f"COMPLETADO - mapa {pct:.1f}% en {self.tiempo_final:.1f} s"
             surf = fuente.render(msg, True, (255, 220, 60))
-        elif modo == "exploracion":
-            msg = f"[EXPLORACION] {strat} - descubierto {pct:.1f}%"
-            surf = fuente.render(msg, True, (150, 220, 255))
-        elif modo == "inspeccion":
-            pct_ins = self.mundo.porcentaje_inspeccionado * 100.0
-            msg = f"[INSPECCION] {strat} - inspeccionado {pct_ins:.1f}%"
-            surf = fuente.render(msg, True, (120, 255, 180))
-        elif modo == "hibrido":
+        elif modo == "dos_etapas":
             if self.etapa == "inspeccion":
                 pct_ins = self.mundo.porcentaje_inspeccionado * 100.0
-                msg = f"[HIBRIDO-INSPECCION] {strat} - insp {pct_ins:.1f}%"
+                msg = f"[2 ETAPAS - INSPECCION] {strat} - insp {pct_ins:.1f}%"
                 color = (120, 255, 180)
             else:
-                msg = f"[HIBRIDO-EXPLORACION] {strat} - descubierto {pct:.1f}%"
+                msg = f"[2 ETAPAS - EXPLORACION] {strat} - descubierto {pct:.1f}%"
                 color = (255, 200, 100)
+            surf = fuente.render(msg, True, color)
+        elif modo == "hibrido":
+            pct_ins = self.mundo.porcentaje_inspeccionado * 100.0
+            msg = f"[HIBRIDO] {strat} - descubierto {pct:.1f}% / insp {pct_ins:.1f}%"
+            color = (200, 160, 255)
             surf = fuente.render(msg, True, color)
         else:
             msg = f"{strat} - descubierto {pct:.1f}%"

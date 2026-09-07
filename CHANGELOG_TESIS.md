@@ -1158,3 +1158,46 @@ _al finalizar tramo (timer >= duration):
 - Frontier Exploracion: 2231 scouted, 0 inspeccionadas (correcto).
 - Voronoi Inspeccion: 2145 scouted, 570 inspeccionadas (correcto).
 - Voronoi Hibrido: 2075 scouted, 283 inspeccionadas (correcto).
+
+---
+
+# CHANGELOG_TESIS - Fase 4: Integración de Aprendizaje por Refuerzo (RL) y Benchmarking
+
+*Fecha: 7 de septiembre de 2026.*
+
+Esta sección documenta los desarrollos correspondientes a la Fase 4 de la tesis, enfocado en el entrenamiento e inferencia de agentes con Aprendizaje por Refuerzo (PPO), integración en la GUI/Simulación en tiempo real y la suite de benchmarking comparativo.
+
+## 1. Resumen de lo implementado
+
+### 1.1 Entorno Gym/Gymnasium para Swarm (`src/rl/env.py`)
+- **Entorno Gymnasium personalizable**: `SwarmEnv` compatible con Stable-Baselines3 (PPO) que simula el enjambre sin necesidad de servidor gráfico (`headless`).
+- **Soporte de Modalidades**: Soporta mapa conocido (`map_known=True`) y mapa desconocido (`map_known=False`), evaluando observaciones espaciales y estado global de los robots.
+- **Función de Recompensa Estructurada**: Diseñada para incentivar la exploración de celdas no vistas, la inspección eficiente de estructuras y penalizar colisiones e inactividad.
+
+### 1.2 Integración y Controlador de Inferencia RL (`src/rl/controller.py`, `src/rl/infer.py`)
+- **Controlador RL en tiempo real (`RLController`)**: Permite que un modelo PPO previamente entrenado maneje la asignación de objetivos a los robots directamente durante la ejecución interactiva en Pygame.
+- **Mapeo de Estrategias RL**: Soporte para estrategias `RL Exploracion`, `RL Inspeccion` y `RL Hibrido`.
+
+### 1.3 Entrenador y Scripts de Soporte (`src/rl/train.py`, `train_rl_v2.py`)
+- Pipeline completo de entrenamiento con PPO de Stable-Baselines3, guardando checkpoints y modelos finales en `models/`.
+- Scripts de soporte para pruebas de inferencia y depuración rápida de políticas y vectores de observación.
+
+### 1.4 Benchmark Comparativo (`src/rl/benchmark.py`)
+- **Evaluación Automatizada**: Módulo para comparar de forma exhaustiva estrategias heurísticas (Random Walk, Frontier-Based, Voronoi, Boustrophedon, etc.) contra modelos RL entrenados.
+- **Métricas e Informes**: Exportación de métricas a archivos CSV (`results/benchmark.csv`, `results/benchmark_summary.csv`) y generación de gráficas comparativas.
+
+## 2. Archivos creados y modificados
+
+| Archivo | Tipo | Cambio |
+|---|---|---|
+| `src/rl/env.py` | mod | Actualización y refinamiento del entorno `SwarmEnv` Gymnasium. |
+| `src/rl/train.py` | mod | Mejora del flujo de entrenamiento PPO y manejo de hiperparámetros. |
+| `src/rl/infer.py` | mod | Actualizaciones para inferencia e integración de modelos. |
+| `src/rl/controller.py` | nuevo | Controlador RL para conectar la política entrenada con el bucle de la GUI en Pygame. |
+| `src/rl/benchmark.py` | nuevo | Script de benchmarking comparativo entre heurísticas y RL. |
+| `src/core/simulacion.py` | mod | Integración de estrategias RL en la selección de planners de la simulación. |
+| `src/core/config.py` | mod | Configuración de parámetros para modos RL y soporte en YAML. |
+| `src/robots/robot.py` | mod | Ajustes en navegación y respuesta a comandos del controlador RL. |
+| `src/gui/stats_window.py` | mod | Soporte de UI para seleccionar modelos RL y configurar parámetros asociados. |
+| `config/default.yaml` | mod | Nuevas entradas de configuración para modelos RL y rutas de checkpoints. |
+| `CHANGELOG_TESIS.md` | mod | Inclusión de esta documentación de cambios. |

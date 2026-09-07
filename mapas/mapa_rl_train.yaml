@@ -1,0 +1,8 @@
+map_width: 200
+map_height: 200
+grid_size: 20
+num_robots: 2
+nombre: Mapa RL Training (10x10)
+descripcion: 'Mapa pequeno para entrenamiento RL rapido.'
+walls: []
+defecto_num_blobs: 2

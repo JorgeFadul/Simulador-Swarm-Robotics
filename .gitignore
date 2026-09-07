@@ -6,7 +6,11 @@ venv/
 env/
 .env
 *.log
+log_*.txt
+headless_*.csv
+headless_*.json
 .DS_Store
 Thumbs.db
 models/
 runs/
+

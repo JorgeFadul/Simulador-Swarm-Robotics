@@ -1,0 +1,21 @@
+map_width: 1000
+map_height: 1000
+grid_size: 20
+num_robots: 10
+nombre: "RL Hibrido V2 - 50x50 (10 robots)"
+descripcion: "Entrenamiento V2: mayor presion temporal + recompensa por defectos descubiertos por paso."
+walls: []
+defecto_num_blobs: 4
+rl_reward:
+  reward_nueva: 1.0
+  reward_redundancia: -0.1
+  reward_colision_rr: -0.3
+  reward_colision_pared: -0.1
+  reward_tiempo: -0.003
+  reward_nueva_global: 0.5
+  reward_tiempo_global: -0.005
+  reward_defecto: 5.0
+  reward_defecto_global: 5.0
+  alpha: 0.6
+  bonus_completar: 80.0
+  castigo_timeout: -80.0

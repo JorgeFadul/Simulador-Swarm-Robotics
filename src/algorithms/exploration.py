@@ -233,11 +233,14 @@ class VoronoiExploracion:
         self.cfg = cfg
         self.rng = rng or np.random.default_rng()
         self.mask = None
+        # Anotaciones de la particion actual para el renderer (ver_voronoi).
+        self._viz = {"mapa": None, "sitios": [], "objetivos": []}
 
     def _particion(self, mundo):
         """Devuelve una lista de regiones (una por robot), cada una con sus celdas."""
         gs = mundo.cfg.grid_size
         robots = mundo.robots
+        self._viz = {"mapa": None, "sitios": [], "objetivos": []}
         if not robots:
             return []
         sitios = [(r.x, r.y) for r in robots]
@@ -246,12 +249,16 @@ class VoronoiExploracion:
         libre = mundo.grid == 0
         conocido = mundo.explored != 0
         celdas = np.argwhere(libre & conocido)
+        region_map = np.full((mundo.rows, mundo.cols), -1, dtype=np.int16)
         for r_i, c_i in celdas:
             gx = c_i * gs + gs / 2
             gy = r_i * gs + gs / 2
             mejor = min(range(len(sitios)),
                         key=lambda k: (sitios[k][0] - gx) ** 2 + (sitios[k][1] - gy) ** 2)
+            region_map[int(r_i), int(c_i)] = mejor
             regiones[mejor]["celdas"].append((int(r_i), int(c_i)))
+        self._viz["mapa"] = region_map
+        self._viz["sitios"] = sitios
         return regiones
 
     def generar(self, mundo):
@@ -278,6 +285,9 @@ class VoronoiExploracion:
             if mejor is not None:
                 objetivos.append(mejor)
         objetivos.sort(key=lambda t: -t["score"])
+        self._viz["objetivos"] = [
+            {"x": t["x"], "y": t["y"], "robot": t.get("robot")} for t in objetivos
+        ]
         return objetivos
 
 

@@ -2,20 +2,18 @@
 
 Cada mapa es una escena reproducible que combina:
   * paredes internas (no cerradas) definidas a mano por escenario;
-  * areas afectadas (defectos) generadas algoritmicamente como "blobs" o
-    manchas irregulares sobre celdas libres, que no se solapan con las paredes
-    ni entre si.
+  * areas afectadas (defectos) generadas en `Mundo._inicializar_defectos`
+    por recursion probabilistica de blobs (semillas repartidas por el suelo
+    con separacion minima, que crecen con probabilidades decrecientes).
 
-El resultado se escribe como YAML (`mapas/mapa_test_<n>.yaml`) que `cargar_mapa`
-sabe leer (map_width, map_height, grid_size, num_robots, walls, defecto_blobs).
-
-La forma irregular de cada blob se "cresce" en `Mundo._inicializar_defectos_blobs`
-con una caminata aleatoria con amortiguacion radial y rechazo de paredes; aqui
-solo se fijan los centros semilla (equispaciados para no solaparse) y su radio.
+El resultado se escribe como YAML (`mapas/mapa_test_<n>.yaml`) que
+`cargar_mapa` sabe leer (map_width, map_height, grid_size, num_robots,
+walls, defecto_num_blobs). La forma y tamano de los blobs se resuelven en
+tiempo de corrida a partir de `defecto_num_blobs`; aqui solo se fija cuantas
+semillas usa cada escenario.
 """
 
 import os
-import random
 
 import yaml
 
@@ -27,8 +25,7 @@ GRID = 20
 NUM_ROBOTS = 3
 
 # Escenarios: paredes internas (no cerradas). Cada pared = {x, y, width, height}
-# en px. Los centros semilla de defectos se colocan en espacio libre lejos de
-# las paredes (ver _colocar_blobs).
+# en px. `n_blobs` fija cuantas semillas de defecto usa cada escenario.
 _ESCENARIOS = [
     {  # mapa_test_1: corredor central vertical
         "nombre": "Corredor Central",
@@ -40,7 +37,6 @@ _ESCENARIOS = [
             {"x": 280, "y": 300, "width": 24, "height": 160, "angle": 0},
         ],
         "n_blobs": 3,
-        "radio_blob": 40,
     },
     {  # mapa_test_2: columnas en retícula
         "nombre": "Columnas en Reticula",
@@ -56,7 +52,6 @@ _ESCENARIOS = [
             {"x": 320, "y": 320, "width": 24, "height": 24, "angle": 0},
         ],
         "n_blobs": 4,
-        "radio_blob": 35,
     },
     {  # mapa_test_3: laberinto abierto (paredes no cerradas)
         "nombre": "Laberinto Abierto",
@@ -68,7 +63,6 @@ _ESCENARIOS = [
             {"x": 70, "y": 195, "width": 22, "height": 110, "angle": 0},
         ],
         "n_blobs": 5,
-        "radio_blob": 32,
     },
     {  # mapa_test_4: particiones diagonales (paredes con angulo)
         "nombre": "Particiones Diagonal",
@@ -80,9 +74,8 @@ _ESCENARIOS = [
             {"x": 280, "y": 290, "width": 22, "height": 140, "angle": 35},
         ],
         "n_blobs": 4,
-        "radio_blob": 36,
     },
-    {  # mapa_test_5: salta de habitaciones (sin cerrar)
+    {  # mapa_test_5: salones abiertos (sin cerrar)
         "nombre": "Salones Abiertos",
         "descripcion": "Paredes internas aisladas tipo estanterias/divisores.",
         "walls": [
@@ -94,65 +87,13 @@ _ESCENARIOS = [
             {"x": 320, "y": 200, "width": 90, "height": 26, "angle": 0},
         ],
         "n_blobs": 3,
-        "radio_blob": 34,
     },
 ]
 
 
-def _puntos_libres(cfg, walls, n, radio, separacion, rng):
-    """Elige n centros (px) de celdas libres, separados >= `separacion` entre si
-    y lejos de las paredes (a mas de radio + margen), para que los blobs no se
-    solapen con las paredes ni entre si. Devuelve lista de (x, y)."""
-    gs = cfg.grid_size
-
-    def celda_libre_px(px, py):
-        c = int(px // gs)
-        r = int(py // gs)
-        return (1 <= r < cfg.rows - 1 and 1 <= c < cfg.cols - 1)
-
-    def lejos_de_paredes(px, py):
-        margen = cfg.grid_size + radio + 6
-        for w in walls:
-            dx = abs(px - w["x"])
-            dy = abs(py - w["y"])
-            if dx < w["width"] / 2 + margen and dy < w["height"] / 2 + margen:
-                return False
-        return True
-
-    puntos = []
-    intentos = 0
-    while len(puntos) < n and intentos < n * 200:
-        intentos += 1
-        px = rng.uniform(gs * 2, MAP_ANCHO - gs * 2)
-        py = rng.uniform(gs * 2, MAP_ALTO - gs * 2)
-        if not celda_libre_px(px, py):
-            continue
-        if not lejos_de_paredes(px, py):
-            continue
-        if all((px - qx) ** 2 + (py - qy) ** 2 >= separacion ** 2 for qx, qy in puntos):
-            puntos.append((px, py))
-    return puntos
-
-
-def construir_mapa_prueba(idx, cfg=None, semilla=None):
+def construir_mapa_prueba(idx, cfg=None):
     """Devuelve el dict de configuracion YAML del mapa de prueba idx (1..5)."""
     esc = _ESCENARIOS[idx - 1]
-    cfg = cfg or Config()
-    rng = random.Random(semilla if semilla is not None else (1000 + idx))
-
-    separacion = esc["radio_blob"] * 2.6
-    centros = _puntos_libres(cfg, esc["walls"], esc["n_blobs"],
-                             esc["radio_blob"], separacion, rng)
-
-    blobs = []
-    for i, (cx, cy) in enumerate(centros):
-        blobs.append({
-            "cx": round(cx, 1),
-            "cy": round(cy, 1),
-            "radio": esc["radio_blob"],
-            "semilla": int(2000 + idx * 100 + i),
-        })
-
     return {
         "map_width": MAP_ANCHO,
         "map_height": MAP_ALTO,
@@ -161,7 +102,7 @@ def construir_mapa_prueba(idx, cfg=None, semilla=None):
         "nombre": esc["nombre"],
         "descripcion": esc["descripcion"],
         "walls": esc["walls"],
-        "defecto_blobs": blobs,
+        "defecto_num_blobs": esc["n_blobs"],
     }
 
 

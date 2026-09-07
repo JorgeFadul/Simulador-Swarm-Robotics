@@ -22,18 +22,18 @@ def parse_args():
     parser.add_argument("--headless", action="store_true",
                         help="Corre la simulacion en memoria (sin ventanas) y "
                              "transmite el estado por stdout en JSONL.")
-    parser.add_argument("--modo", choices=["exploracion", "inspeccion", "hibrido"],
+    parser.add_argument("--modo", choices=["dos_etapas", "hibrido"],
                         default=None,
-                        help="Modo de fase: exploracion, inspeccion o hibrido.")
+                        help="Tipo de simulacion: dos_etapas o hibrido.")
     parser.add_argument("--estrategia-exploracion",
                         choices=ESTRATEGIAS_EXPLORACION, default=None,
-                        help="Estrategia para el modo exploracion.")
+                        help="Estrategia de exploracion (modo dos_etapas, fase 1).")
     parser.add_argument("--estrategia-inspeccion",
                         choices=ESTRATEGIAS_INSPECCION, default=None,
-                        help="Estrategia para el modo inspeccion.")
+                        help="Estrategia de inspeccion (modo dos_etapas, fase 2).")
     parser.add_argument("--estrategia-hibrido",
                         choices=ESTRATEGIAS_HIBRIDO, default=None,
-                        help="Estrategia para el modo hibrido.")
+                        help="Estrategia para el modo hibrido (una etapa).")
     # Compatibilidad: --estrategia viejo
     parser.add_argument("--estrategia", default=None,
                         help="(Deprecated) Estrategia legacy. Mapea al modo "
@@ -61,9 +61,11 @@ def cargar_mapa(cfg, ruta):
         cfg.num_robots = int(data["num_robots"])
     if "walls" in data:
         cfg.walls = data["walls"]
-    if "defecto_blobs" in data and data["defecto_blobs"]:
-        cfg.defecto_blobs = data["defecto_blobs"]
-        cfg.prob_defecto = 0.0
+    for k in ("defecto_num_blobs", "defecto_prob_ortogonal",
+              "defecto_prob_diagonal", "defecto_decaimiento",
+              "defecto_semilla_global"):
+        if k in data:
+            setattr(cfg, k, data[k])
     cfg.cols = cfg.map_width // cfg.grid_size
     cfg.rows = cfg.map_height // cfg.grid_size
 
@@ -100,7 +102,7 @@ def correr_headless(cfg, seed):
     elif sim.pasos_totales >= cfg.headless_max_pasos:
         motivo = "limite_pasos"
 
-    strat = cfg._estrategia_activa()
+    strat = cfg._estrategia_activa(sim.etapa)
     base = f"headless_{cfg.modo_fase}_{strat.replace(' ', '_')}"
     base += f"_seed{seed}" if seed is not None else "_ns"
     ruta_json = base + ".json"
@@ -162,25 +164,37 @@ def main():
     # Aplicar argumentos CLI
     if args.modo:
         cfg.modo_fase = args.modo
+    cfg._normalizar_modo()
     if args.estrategia_exploracion:
         cfg.estrategia_exploracion = args.estrategia_exploracion
     if args.estrategia_inspeccion:
         cfg.estrategia_inspeccion = args.estrategia_inspeccion
     if args.estrategia_hibrido:
         cfg.estrategia_hibrido = args.estrategia_hibrido
+        cfg.modo_fase = "hibrido"
+        cfg._normalizar_modo()
+
+    # RL Hibrido: el modelo entrenado fija la cantidad de robots (arquitectura
+    # de la red). Forzar el numero que espera el modelo para que la observacion
+    # coincida (el estandar del simulador es 10 robots).
+    if cfg.modo_fase == "hibrido":
+        if cfg.estrategia_hibrido == "RL Hibrido":
+            cfg.num_robots = int(getattr(cfg, "rl_hibrido_num_robots", 10))
+        elif cfg.estrategia_hibrido == "RL Hibrido V2":
+            cfg.num_robots = int(getattr(cfg, "rl_hibrido_v2_num_robots", 10))
 
     # Compatibilidad: --estrategia viejo
     if args.estrategia:
         old = args.estrategia
-        if old in ESTRATEGIAS_EXPLORACION:
-            cfg.modo_fase = "exploracion"
-            cfg.estrategia_exploracion = old
-        elif old in ESTRATEGIAS_INSPECCION:
-            cfg.modo_fase = "inspeccion"
-            cfg.estrategia_inspeccion = old
-        elif old in ESTRATEGIAS_HIBRIDO:
+        if old in ESTRATEGIAS_HIBRIDO:
             cfg.modo_fase = "hibrido"
             cfg.estrategia_hibrido = old
+        elif old in ESTRATEGIAS_EXPLORACION:
+            cfg.modo_fase = "dos_etapas"
+            cfg.estrategia_exploracion = old
+        elif old in ESTRATEGIAS_INSPECCION:
+            cfg.modo_fase = "dos_etapas"
+            cfg.estrategia_inspeccion = old
 
     cfg.sync_strategy()
 
@@ -194,6 +208,14 @@ def main():
 
     if args.mapa:
         cargar_mapa(cfg, args.mapa)
+
+    # Re-forzar el numero de robots tras cargar el mapa (el YAML del mapa
+    # podria indicar otro numero). Solo en modo RL Hibrido.
+    if cfg.modo_fase == "hibrido":
+        if cfg.estrategia_hibrido == "RL Hibrido":
+            cfg.num_robots = int(getattr(cfg, "rl_hibrido_num_robots", 10))
+        elif cfg.estrategia_hibrido == "RL Hibrido V2":
+            cfg.num_robots = int(getattr(cfg, "rl_hibrido_v2_num_robots", 10))
 
     if args.headless:
         return correr_headless(cfg, args.semilla)

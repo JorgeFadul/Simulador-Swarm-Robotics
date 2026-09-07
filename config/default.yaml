@@ -15,15 +15,19 @@ exploration_threshold: 0.99
 exploration_radius_multiplier: 1.5
 robot_turn_speed_rad_s: 3.14159
 
-# --- Sistema de modos y estrategias ---
-# Modo de fase: "exploracion", "inspeccion" o "hibrido"
-modo_fase: "exploracion"
+# --- Sistema de simulación y estrategias ---
+# Tipo de simulacion (2 opciones):
+#   dos_etapas: exploracion -> inspeccion con transicion dinamica.
+#               Usa estrategia_exploracion (fase 1) y estrategia_inspeccion (fase 2).
+#   hibrido:    una sola etapa: explora e inspecciona a la vez.
+#               Usa estrategia_hibrido.
+modo_fase: "dos_etapas"
 
 # Estrategia por modo (solo la del modo activo se usa):
-#   exploracion: Random Walk, Frontier Based, Sample Based, Hybrid,
-#                Boustrophedon, RL Exploracion
-#   inspeccion:  Voronoi, Boustrophedon Inspeccion, RL Inspeccion
-#   hibrido:     Random Walk Hibrido, RL Hibrido
+#   exploracion (fase 1): Random Walk, Frontier Based, Sample Based, Hybrid,
+#                         Boustrophedon, RL Exploracion
+#   inspeccion (fase 2):  Voronoi, Boustrophedon Inspeccion, RL Inspeccion
+#   hibrido (una etapa):  Random Walk Hibrido, RL Hibrido
 estrategia_exploracion: "Frontier Based"
 estrategia_inspeccion: "Voronoi"
 estrategia_hibrido: "Random Walk Hibrido"
@@ -58,9 +62,15 @@ energia_inspeccion_j: 0.5
 inspeccion_pausa_s: 1.0
 
 # --- Fase 3: Voronoi recursivo + Market Auction ---
+# (obsoletos, se conservan por compatibilidad)
 auction_defectivo_factor: 0.15
 auction_sano_factor: 0.25
 auction_profundidad_p: 0.97
+# Nueva semantica: estricto padre->hijos, peso por generacion, ajuste dinamico.
+inspeccion_padre_antes_hijo: true
+inspeccion_peso_generacion: 1.5
+inspeccion_factor_sano: 1.5
+inspeccion_factor_defectivo: 0.6
 
 # --- Inspeccion de baldosas ---
 prob_defecto: 0.2
@@ -68,7 +78,21 @@ inspeccionar_al_visitar: true
 # false = colectivo (mundo.inspec), true = individual (robot.inspec_robot)
 inspeccion_individual: false
 ruido_inspeccion_sigma: 0.0
-defecto_blobs: []
+
+# --- Defectos: recursion probabilistica de blobs ---
+# Semillas (5-10) repartidas por las celdas libres con separacion minima
+# D = int(1.2 * num_semillas) (~±20% de tolerancia). Si el mapa no admite
+# esa separacion, la cantidad de semillas se reduce a la mitad.
+defecto_num_blobs: 7
+# Probabilidad de contagio: una celda defectuosa intenta marcar sus vecinas
+# ortogonales con defecto_prob_ortogonal y las diagonales con
+# defecto_prob_diagonal. Cada recursion multiplica ambas por
+# defecto_decaimiento hasta agotar el frente (blobs grandes).
+defecto_prob_ortogonal: 0.90
+defecto_prob_diagonal: 0.75
+defecto_decaimiento: 0.80
+# Entero fijo para reproducibilidad exacta; vacio = derivado de --semilla
+defecto_semilla_global: null
 
 # --- Transicion (modo hibrido: umbral de descubrimiento) ---
 transicion:
@@ -81,3 +105,59 @@ headless_max_pasos: 60000
 walls:
   - {x: 330, y: 500, width: 20, height: 600, angle: 0}
   - {x: 670, y: 500, width: 20, height: 600, angle: 0}
+
+# --- RL Training ---
+rl:
+  reward:
+    reward_nueva: 1.0
+    reward_redundancia: -0.1
+    reward_colision_rr: -0.3
+    reward_colision_pared: -0.1
+    reward_tiempo: -0.001
+    reward_nueva_global: 0.5
+    reward_tiempo_global: -0.001
+    alpha: 0.6
+    bonus_completar: 50.0
+    castigo_timeout: -50.0
+  hibrido:
+    model: models/rl_hibrido_v1/final
+    map_known: true
+    auto_assign: true
+    num_robots: 10
+  hibrido_v2:
+    model: models/rl_v2/final
+    map_known: true
+    auto_assign: true
+    num_robots: 10
+  curriculum:
+    - num_robots: 3
+      map_width: 200
+      map_height: 200
+      max_steps: 1000
+      duration_steps: 30000
+    - num_robots: 5
+      map_width: 400
+      map_height: 400
+      max_steps: 3000
+      duration_steps: 80000
+    - num_robots: 7
+      map_width: 600
+      map_height: 600
+      max_steps: 6000
+      duration_steps: 150000
+    - num_robots: 10
+      map_width: 1000
+      map_height: 1000
+      max_steps: 10000
+      duration_steps: 300000
+  ppo:
+    learning_rate: 3e-4
+    n_steps: 2048
+    batch_size: 64
+    n_epochs: 10
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_range: 0.2
+    ent_coef: 0.01
+    vf_coef: 0.5
+    net_arch: [256, 256]

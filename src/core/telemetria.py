@@ -75,7 +75,7 @@ def estado_simulacion(sim):
         "t": round(sim.tiempo_simulado, 3),
         "paso": sim.pasos_totales,
         "estado": sim.estado,
-        "estrategia": sim.cfg._estrategia_activa(),
+        "estrategia": sim.cfg._estrategia_activa(sim.etapa),
         "modo_fase": sim.cfg.modo_fase,
         "cobertura": {
             "mapa_pct": round(100.0 * (v + s + d) / total, 2) if total else 0.0,
@@ -134,7 +134,7 @@ def construir_resumen(sim, semilla=None, estrategia=None, resultado=None):
     ppcm = m.cfg.pixels_per_cm
     energia_total = sum(r.energia.energia_consumida_total for r in robots)
     return {
-        "estrategia": estrategia or sim.cfg._estrategia_activa(),
+        "estrategia": estrategia or sim.cfg._estrategia_activa(sim.etapa),
         "semilla": semilla,
         "resultado": resultado or sim.estado,
         "tiempo_simulado_s": round(sim.tiempo_simulado, 3),

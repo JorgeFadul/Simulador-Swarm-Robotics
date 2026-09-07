@@ -99,81 +99,135 @@ class Mundo:
         self.etapa = "inspeccion"
 
     def _inicializar_defectos(self, rng):
-        """Genera el ground truth de baldosas defectuosas sobre celdas libres.
+        """Genera el ground truth de defectos por recursion probabilistica.
 
-        Dos modos:
-          * Si `cfg.defecto_blobs` trae una lista de blobs {cx, cy, radio}
-            (mapas de prueba generados algoritmicamente), se crean manchas
-            irregulares de defectos con esas semillas (no se solapan con
-            paredes ni entre si) y se ignoran `prob_defecto`.
-          * Si no hay blobs, se usa la distribucion uniforme con
-            `prob_defecto` (Fase 0).
-
-        El rng llega de la simulacion (sembrado por --semilla). En el modo
-        uniforme la semilla es local para reproducir la misma distribucion en
-        corridas repetidas. En el modo blobs cada blob usa su propia semilla
-        determinista de la definicion del mapa (reproducible sin importar la
-        semilla de la simulacion). Los bordes y paredes nunca son
-        inspeccionables.
+        Se colocan `defecto_num_blobs` semillas (5-10 por defecto)
+        distribuidas por las celdas libres con separacion minima
+        D = int(1.2 * num_semillas) y tolerancia ±20%; si el mapa no las
+        admite, la cantidad se reduce a la mitad. Cada semilla crece un blob
+        grande: una celda defectuosa intenta marcar sus vecinas ortogonales
+        con `defecto_prob_ortogonal` y las diagonales con
+        `defecto_prob_diagonal`, y en cada recursion ambas se multiplican por
+        `defecto_decaimiento` hasta agotar el frente. Las paredes y los
+        bordes nunca se marcan.
         """
         self.defectos = np.zeros((self.rows, self.cols), dtype=np.int8)
-        blobs = getattr(self.cfg, "defecto_blobs", None) or []
-        if blobs:
-            self._inicializar_defectos_blobs(blobs)
+        if rng is None:
+            rng = np.random.default_rng(0)
+        semilla_global = getattr(self.cfg, "defecto_semilla_global", None)
+        if semilla_global is not None:
+            local = np.random.default_rng(int(semilla_global))
         else:
-            prob = self.cfg.prob_defecto
-            if rng is None:
-                rng = np.random.default_rng(0)
-            # Semilla local derivada del rng base para no consumir su secuencia
             semilla_local = int(rng.integers(0, 2 ** 31))
             local = np.random.default_rng(semilla_local)
-            defectos = local.random((self.rows, self.cols))
-            mask = (self.grid == 0) & (defectos < prob)
-            self.defectos[mask] = 1
+        semillas = self._distribuir_semillas(local)
+        self.defectos = self._crecer_blob_recursivo(semillas, local)
         self._defectuosas_gt = int(self.defectos.sum())
 
-    def _inicializar_defectos_blobs(self, blobs):
-        """Crea manchas irregulares de defectos a partir de blobs semilla.
+    def _distribuir_semillas(self, rng):
+        """Elige las semillas defectuosas repartidas por el suelo.
 
-        Cada blob se define con {cx, cy, radio} en px sobre el mapa. A partir
-        de la celda central se "crece" una mancha con un paseo aleatorio sesgado
-        radialmente, generando bordes irregulares (ver el algoritmo documentado
-        en CHANGELOG_TESIS). Las celdas de pared y los bordes del mapa nunca
-        se marcan, y cada blob usa una semilla determinista para ser
-        reproducible.
+        La separacion minima ortogonal es D = int(1.2 * num_semillas)
+        casillas (con tolerancia ±20%). Si el mapa no admite esa separacion,
+        la cantidad de semillas se reduce a la mitad hasta que quepan. Las
+        semillas se toman de una grilla con paso D desplazada al azar y
+        filtrada por celdas libres; si las paredes dejan huecos, se rellenan
+        por rechazo sobre todas las celdas libres. Devuelve lista de (r, c).
         """
-        gs = self.cfg.grid_size
-        ultima = None
-        for i, b in enumerate(blobs):
-            cx_px, cy_px = float(b["cx"]), float(b["cy"])
-            radio = max(int(b.get("radio", 0)), 1)
-            semilla = int(b.get("semilla", 1000 + i))
-            rngb = np.random.default_rng(semilla)
-            rc = int(cy_px // gs)
-            cc = int(cx_px // gs)
-            if not (0 <= rc < self.rows and 0 <= cc < self.cols):
+        num = max(1, int(self.cfg.defecto_num_blobs))
+        filas_int = max(0, self.rows - 2)
+        cols_int = max(0, self.cols - 2)
+        while True:
+            d = max(2, int(1.2 * num))
+            capacidad = max(1, filas_int // d) * max(1, cols_int // d)
+            if capacidad >= num:
+                break
+            num = max(1, num // 2)
+
+        d = max(2, int(1.2 * num))
+        offset_r = int(rng.integers(0, d))
+        offset_c = int(rng.integers(0, d))
+        candidatas = []
+        r = 1 + offset_r
+        while r <= self.rows - 2:
+            c = 1 + offset_c
+            while c <= self.cols - 2:
+                if self.grid[r, c] == 0:
+                    candidatas.append((r, c))
+                c += d
+            r += d
+
+        orden = rng.permutation(len(candidatas))
+        semillas = []
+        for i in orden:
+            if len(semillas) >= num:
+                break
+            semillas.append(candidatas[int(i)])
+
+        if len(semillas) < num:
+            d_umbral = max(1, int(d * (0.8 + float(rng.random()) * 0.4)))
+            libres = [(r, c) for r in range(1, self.rows - 1)
+                      for c in range(1, self.cols - 1) if self.grid[r, c] == 0]
+            orden2 = rng.permutation(len(libres))
+            for i in orden2:
+                if len(semillas) >= num:
+                    break
+                r, c = libres[int(i)]
+                if all(max(abs(r - sr), abs(c - sc)) >= d_umbral
+                       for sr, sc in semillas):
+                    semillas.append((r, c))
+        return semillas
+
+    def _crecer_blob_recursivo(self, semillas, rng):
+        """Hace crecer blobs grandes desde las semillas por recursion.
+
+        Cada celda recien marcada como defectuosa intenta contagiar sus 8
+        vecinas: las ortogonales con `defecto_prob_ortogonal` y las
+        diagonales con `defecto_prob_diagonal`. En cada nivel ambas
+        probabilidades se multiplican por `defecto_decaimiento` (0.8), con
+        lo que el blob crece grande y se detiene por agotamiento natural
+        cuando el frente queda vacio. Las paredes y los bordes nunca se
+        marcan.
+        """
+        defectos = np.zeros((self.rows, self.cols), dtype=np.int8)
+        front = []
+        for r, c in semillas:
+            if not (0 <= r < self.rows and 0 <= c < self.cols):
                 continue
-            # Centro llamado a ser defectuoso solo si es celda libre
-            if self.grid[rc, cc] == 0:
-                self.defectos[rc, cc] = 1
-            # Crecimiento radial con ruido (caminata aleatoria amortiguada)
-            for _ in range(radio * gs):
-                # Cantidad de pasos proporcional al area esperada del blob
-                nr = rc + int(rngb.integers(-1, 2))
-                nc = cc + int(rngb.integers(-1, 2))
-                # Sesgo radial: probar candidatos cercanos al centro del blob
-                dr = nr - rc
-                dc = nc - cc
-                if (dr * dr + dc * dc) > radio * radio:
-                    continue
-                if not (0 <= nr < self.rows and 0 <= nc < self.cols):
-                    continue
-                if self.grid[nr, nc] != 0:
-                    continue
-                # Evita solape con blobs previos: no marcar si ya es defecto de
-                # otro blob (aunque se permita adyacencia).
-                self.defectos[nr, nc] = 1
-            ultima = (rc, cc)
+            if self.grid[r, c] == 0:
+                defectos[r, c] = 1
+                front.append((r, c))
+
+        p_ort = float(self.cfg.defecto_prob_ortogonal)
+        p_diag = float(self.cfg.defecto_prob_diagonal)
+        dec = float(self.cfg.defecto_decaimiento)
+        nivel = 0
+        while front:
+            po = p_ort * (dec ** nivel)
+            pd = p_diag * (dec ** nivel)
+            nuevo_front = []
+            for r, c in front:
+                for dr in (-1, 0, 1):
+                    for dc in (-1, 0, 1):
+                        if dr == 0 and dc == 0:
+                            continue
+                        nr = r + dr
+                        nc = c + dc
+                        if nr < 0 or nr >= self.rows:
+                            continue
+                        if nc < 0 or nc >= self.cols:
+                            continue
+                        if self.grid[nr, nc] != 0:
+                            continue
+                        if defectos[nr, nc]:
+                            continue
+                        prob = pd if (dr != 0 and dc != 0) else po
+                        if rng.random() < prob:
+                            defectos[nr, nc] = 1
+                            nuevo_front.append((nr, nc))
+            front = nuevo_front
+            nivel += 1
+        return defectos
 
     def inspeccionar_celda(self, x, y, robot_id=None):
         """Marca una celda como inspeccionada y registra su resultado binario.
