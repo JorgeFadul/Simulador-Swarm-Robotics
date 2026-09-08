@@ -6,12 +6,27 @@ A Survey"): frontier-based (Yamauchi), sample-based / next-best-view y hybrid.
 
 La planificacion es centralizada y usa el mapa global combinado de todos los
 robots (mundo.explored): ningun robot conoce el mapa real total, solo lo que
-el enjambre ha ido descubriendo. En Frontier Based y Hybrid la asignacion
-empareja por cercania (emparejamiento greedy minimo global): cada region de
-frontera se asigna al robot libre mas cercano y queda reservada en exclusiva
-hasta que el robot completa su objetivo; entonces se reasigna dinamicamente
-la siguiente region mas cercana. Sample Based conserva su asignacion por
-puntaje de ganancia de informacion.
+el enjambre ha ido descubriendo.
+
+Fronteras como ENTIDADES (Frontier Based / Hybrid):
+- Las celdas de frontera (adyacentes a lo desconocido en 8-direcciones) se
+  agrupan en regiones 8-conectadas y las regiones grandes se dividen en
+  chunks de a lo mas `frontier_max_size` celdas (por defecto grid_size // 2,
+  o sea 10 celdas con grid 20, para un mapa 50x50).
+- Cada chunk es una entidad de frontera: un unico objetivo cuyo punto es la
+  celda de la entidad mas cercana a su centroide (navegable). Una frontera de
+  1 celda se comporta como celda individual.
+
+Task allocation (Hybrid Based / Frontier Based) -> `_asignar_dinamico`:
+- La funcion de costo de una frontera es cost = distancia / (celdas + 1):
+  mas celdas -> menor costo; mas distancia -> mayor costo. La lista de
+  prioridad ordena TODOS los pares (robot, frontera) por costo creciente y
+  cada frontera se reserva en exclusiva para UN solo robot (los demas no van).
+- La asignacion se recalcula cada plan_interval_s con la posicion ACTUAL de
+  cada robot: un robot en transito se REASIGNA a una frontera nueva que le
+  salga significativamente mas barata por el camino (ve las fronteras
+  cercanas primero). Si un robot se queda sin frontera y no quedan libres,
+  cae a la de menor costo aunque ya este reservada (cooperacion forzada).
 """
 
 import math
@@ -24,7 +39,8 @@ _RNG = np.random.default_rng()
 
 
 def _celdas_frontera(mundo):
-    """Mascara: celda libre y conocida adyacente a una celda desconocida."""
+    """Mascara: celda libre y conocida adyacente (8-direcciones) a una celda
+    desconocida."""
     libre = mundo.grid == 0
     conocido = mundo.explored != 0
     desconocido = mundo.explored == 0
@@ -33,13 +49,67 @@ def _celdas_frontera(mundo):
         | np.roll(desconocido, -1, axis=0)
         | np.roll(desconocido, 1, axis=1)
         | np.roll(desconocido, -1, axis=1)
+        | np.roll(np.roll(desconocido, 1, axis=0), 1, axis=1)
+        | np.roll(np.roll(desconocido, 1, axis=0), -1, axis=1)
+        | np.roll(np.roll(desconocido, -1, axis=0), 1, axis=1)
+        | np.roll(np.roll(desconocido, -1, axis=0), -1, axis=1)
     )
     return libre & conocido & vecina
 
 
-def _agrupar_regiones(mask, min_size):
-    """Agrupa celdas de frontera conectadas (4-vecindad) en regiones."""
-    rows, cols = mask.shape
+def _vecinos(r, c, rows, cols, diag=True):
+    """Vecinos dentro de limites. diag=True usa 8-direcciones, False 4."""
+    base = [(r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)]
+    if diag:
+        base += [(r + 1, c + 1), (r + 1, c - 1), (r - 1, c + 1), (r - 1, c - 1)]
+    return [(nr, nc) for nr, nc in base if 0 <= nr < rows and 0 <= nc < cols]
+
+
+def _dividir_region(region, max_size, rows, cols):
+    """Divide una region de celdas conectadas en chunks conectados de a lo
+    mas `max_size` celdas cada uno. Cada chunk queda internamente 8-conectado
+    (flood-fill BFS desde una celda no reclamada)."""
+    if len(region) <= max_size:
+        return [region]
+    celdas_set = set(region)
+    reclamadas = set()   # celdas ya contadas en algun chunk
+    chunks = []
+    for semilla in region:
+        if semilla in reclamadas:
+            continue
+        chunk = []
+        pila = [semilla]
+        en_pila = {semilla}
+        while pila and len(chunk) < max_size:
+            actual = pila.pop()
+            en_pila.discard(actual)
+            if actual in reclamadas:
+                continue
+            # Se reclama al CONTAR en el chunk (no al apilar), para no
+            # perder celdas que quedan en pila cuando el chunk se llena.
+            reclamadas.add(actual)
+            chunk.append(actual)
+            for nr, nc in _vecinos(actual[0], actual[1], rows, cols, diag=True):
+                v = (nr, nc)
+                if (v in celdas_set and v not in reclamadas
+                        and v not in en_pila):
+                    en_pila.add(v)
+                    pila.append(v)
+        chunks.append(chunk)
+    return chunks
+
+
+def _agrupar_regiones(mask, min_size, max_size=None, rows=None, cols=None):
+    """Agrupa celdas de frontera conectadas (8-vecindad) en regiones.
+
+    Si se indica `max_size`, cada region resultante se divide ademas en chunks
+    conectados de a lo mas `max_size` celdas (fronteras grandes no se tratan
+    como un solo objetivo: cada chunk es una entidad asignable)."""
+    h, w = mask.shape
+    if rows is None:
+        rows = h
+    if cols is None:
+        cols = w
     visitado = np.zeros_like(mask, dtype=bool)
     regiones = []
     for r in range(rows):
@@ -51,20 +121,27 @@ def _agrupar_regiones(mask, min_size):
                 while stack:
                     cr, cc = stack.pop()
                     region.append((cr, cc))
-                    for nr, nc in ((cr + 1, cc), (cr - 1, cc), (cr, cc + 1), (cr, cc - 1)):
-                        if (0 <= nr < rows and 0 <= nc < cols and
-                                mask[nr, nc] and not visitado[nr, nc]):
+                    for nr, nc in _vecinos(cr, cc, rows, cols, diag=True):
+                        if mask[nr, nc] and not visitado[nr, nc]:
                             visitado[nr, nc] = True
                             stack.append((nr, nc))
                 if len(region) >= min_size:
-                    regiones.append(region)
+                    if max_size and len(region) > max_size:
+                        regiones.extend(_dividir_region(region, max_size, rows, cols))
+                    else:
+                        regiones.append(region)
     return regiones
 
 
-def _centroide(region, gs):
-    rs = sum(p[0] for p in region) / len(region)
-    cs = sum(p[1] for p in region) / len(region)
-    return cs * gs + gs / 2, rs * gs + gs / 2
+def _centroide_celda(celdas, gs):
+    """Centro de la celda de frontera MAS CERCANA al centroide medio de la
+    entidad. Garantiza que el objetivo sea una celda libre/conocida navegable
+    (el punto medio continuo podria caer en una pared o fuera de rango)."""
+    rs = sum(r for r, _ in celdas) / len(celdas)
+    cs = sum(c for _, c in celdas) / len(celdas)
+    # Celda de la entidad con menor distancia al punto medio.
+    mejor = min(celdas, key=lambda rc: (rc[0] - rs) ** 2 + (rc[1] - cs) ** 2)
+    return mejor[1] * gs + gs / 2, mejor[0] * gs + gs / 2
 
 
 def _radio_exploracion(mundo):
@@ -97,6 +174,19 @@ def _costo_mas_cercano(mundo, x, y):
         if costo is None or d < costo:
             costo = d
     return costo if costo is not None else 0.0
+
+
+def _costo_frontera(robot, celdas, gs):
+    """Costo de asignar una frontera (entidad de `celdas`) a un robot.
+
+    Formula: cost = distancia_al_centroide / (num_celdas + 1).
+    Mas celdas -> menor costo; mas distancia -> mayor costo. El robot debe
+    ir a la frontera de MENOR costo (fronteras grandes y cercanas primero)."""
+    n = len(celdas)
+    gx = sum(c for _, c in celdas) / n * gs + gs / 2
+    gy = sum(r for r, _ in celdas) / n * gs + gs / 2
+    dist = math.hypot(robot.x - gx, robot.y - gy)
+    return dist / (n + 1)
 
 
 def _muestrear_en_zona(mundo, cx0, cy0, radio, rng):
@@ -307,12 +397,15 @@ class FrontierBased:
 
     def generar(self, mundo):
         self.mask = _celdas_frontera(mundo)
-        regiones = _agrupar_regiones(self.mask, self.cfg.frontier_min_size)
+        rows, cols = mundo.rows, mundo.cols
+        regiones = _agrupar_regiones(self.mask, self.cfg.frontier_min_size,
+                                     self.cfg.frontier_max_size, rows, cols)
         targets = []
         for region in regiones:
-            x, y = _centroide(region, self.cfg.grid_size)
+            x, y = _centroide_celda(region, self.cfg.grid_size)
             targets.append({"x": x, "y": y, "score": float(len(region)),
-                            "region": region})
+                            "region": region, "celdas": region,
+                            "n_celdas": len(region)})
         targets.sort(key=lambda t: -t["score"])
         return targets
 
@@ -355,8 +448,14 @@ class SampleBased:
 
 
 class Hybrid:
-    """Combina ambos: agrupa la frontera en regiones y muestrea varios puntos
-    de vista por region, quedandose con el mejor de cada una (Charrow [86]).
+    """Combina frontier + sample, con cada frontera tratada como entidad.
+
+    Agrupa las celdas de frontera (8-direcciones) en regiones y divide las
+    grandes en chunks de a lo mas `grid_size // 2` celdas (10 con grid 20).
+    Cada chunk es una ENTIDAD de frontera: un unico objetivo cuyo punto es el
+    centroide de sus celdas, con score de costo = dist/(celdas+1). Asi un
+    robot va al centroide de la entidad, no a una celda individual (salvo que
+    la frontera sea de una sola celda).
     """
 
     nombre = "Hybrid Based"
@@ -368,29 +467,33 @@ class Hybrid:
 
     def generar(self, mundo):
         self.mask = _celdas_frontera(mundo)
-        regiones = _agrupar_regiones(self.mask, self.cfg.frontier_min_size)
-        radio = _radio_exploracion(mundo)
+        rows, cols = mundo.rows, mundo.cols
+        regiones = _agrupar_regiones(self.mask, self.cfg.frontier_min_size,
+                                     self.cfg.frontier_max_size, rows, cols)
         gs = mundo.cfg.grid_size
         targets = []
         for region in regiones:
-            mejor = None
-            for _ in range(self.cfg.sample_per_cluster):
-                r0, c0 = region[self.rng.integers(len(region))]
-                cx0 = c0 * gs + gs / 2
-                cy0 = r0 * gs + gs / 2
-                punto = _muestrear_en_zona(mundo, cx0, cy0, radio, self.rng)
-                if punto is None:
-                    continue
-                x, y = punto
-                gain = _ganancia(mundo, x, y, radio)
-                costo = _costo_mas_cercano(mundo, x, y)
-                score = gain - self.cfg.sample_cost_weight * costo
-                if mejor is None or score > mejor["score"]:
-                    mejor = {"x": x, "y": y, "score": score, "region": region}
-            if mejor is not None:
-                targets.append(mejor)
+            celdas = region
+            # Celda mas cercana al centroide medio de la entidad (siempre
+            # navegable). Con 1 celda es la celda misma -> entidad individual.
+            x, y = _centroide_celda(celdas, gs)
+            # Costo de la entidad respecto al robot mas cercano (el asignado
+            # se decide luego en la asignacion dinamica). Menor costo = mejor.
+            costo = None
+            for r in mundo.robots:
+                cc = _costo_frontera(r, celdas, gs)
+                if costo is None or cc < costo:
+                    costo = cc
+            if costo is None:
+                continue
+            # score invertido para ordenar descendente por bondad (menor costo
+            # = mayor score). El costo real se recalcula por robot en la
+            # asignacion dinamica; aqui solo se ordena la lista.
+            score = 1.0 / (costo + 1e-6)
+            targets.append({"x": x, "y": y, "score": score, "region": celdas,
+                            "celdas": celdas, "n_celdas": len(celdas)})
         targets.sort(key=lambda t: -t["score"])
-        return targets[:self.cfg.sample_targets]
+        return targets
 
 
 class ExplorationPlanner:
@@ -398,8 +501,9 @@ class ExplorationPlanner:
 
     Cada plan_interval_s regenera las regiones de frontera a partir del mapa
     global combinado. En Frontier Based y Hybrid se reserva cada region en
-    exclusiva para el robot asignado (emparejamiento por cercania) hasta que
-    completa su objetivo; Sample Based usa su asignacion por puntaje.
+    exclusiva para el robot asignado (asignacion dinamica por costo
+    dist/(celdas+1), mayor detalle en la docstring de _asignar_dinamico) hasta
+    que completa su objetivo; Sample Based usa su asignacion por puntaje.
     """
 
     def __init__(self, cfg, method, rng=None):
@@ -485,7 +589,7 @@ class ExplorationPlanner:
         elif es_voronoi:
             self._asignar_voronoi(mundo, gs)
         else:
-            self._asignar_regiones(mundo, gs)
+            self._asignar_dinamico(mundo, gs)
 
     def _asignar_legacy(self, mundo):
         """Asignacion original de Sample Based: objetivos por puntaje de
@@ -504,56 +608,124 @@ class ExplorationPlanner:
             if not libres:
                 break
 
-    def _reservar_regiones(self, mundo, regiones, gs):
-        """Marca como reservadas las regiones cuyo centroide sigue cerca del
-        objetivo de cada robot ocupado. Devuelve el conjunto de regiones
-        reservadas y actualiza self._reservas (robot -> celda centroide)."""
-        radio = _radio_exploracion(mundo)
-        reservadas = set()
-        nuevas = {}
-        for idx, r in enumerate(mundo.robots):
-            if r.necesita_objetivo or r.goal is None:
-                continue
-            gx, gy = r.goal
-            mejor = None
-            for t in regiones:
-                if id(t) in reservadas:
-                    continue
-                d = math.hypot(gx - t["x"], gy - t["y"])
-                if d <= radio and (mejor is None or d < mejor[0]):
-                    mejor = (d, t)
-            if mejor is not None:
-                t = mejor[1]
-                reservadas.add(id(t))
-                nuevas[idx] = (int(t["y"] // gs), int(t["x"] // gs))
-        self._reservas = nuevas
-        return reservadas
+    def _frontera_de_robot(self, r, regiones, gs):
+        """Devuelve la frontera (target) cuyo centroide corresponde al goal
+        actual del robot ocupado, o None si no casa con ninguna. Permite saber
+        que frontera esta persiguiendo cada robot para comparar costos."""
+        if r.goal is None:
+            return None
+        mejor = None
+        mejor_d = None
+        for t in regiones:
+            d = math.hypot(r.goal[0] - t["x"], r.goal[1] - t["y"])
+            if mejor_d is None or d < mejor_d:
+                mejor_d = d
+                mejor = t
+        return mejor
 
-    def _asignar_regiones(self, mundo, gs):
-        """Emparejamiento greedy minimo global: en cada paso se asigna el par
-        (robot libre, region no reservada) de menor distancia. La region queda
-        reservada en exclusiva para el robot hasta que completa su objetivo."""
+    def _asignar_dinamico(self, mundo, gs):
+        """Task allocation dinamico por lista de prioridad de costo.
+
+        Cada plan_interval_s se recalculan los costos de TODAS las fronteras
+        contra TODOS los robots usando su posicion ACTUAL (el robot va
+        descubriendo mientras camina). La lista de prioridad ordena los pares
+        por costo creciente (menor costo = fronteras grandes y cercanas arriba).
+
+        Reglas:
+        - Cada frontera (entidad) se reserva en exclusiva para UN solo robot.
+        - Un robot ocupado conserva su frontera mientras no aparezca otra
+          disponible con costo mucho menor (umbral de reasignacion): asi primero
+          atiende las fronteras cercanas/grandes que van apareciendo en vez de
+          clavarse en una lejana.
+        - Si un robot se queda sin obje/asignable (libre), recibe la frontera
+          de menor costo disponible aunque otras ya fueron tomadas.
+        """
         if not self._regiones:
+            self._reservas = {}
             return
-        reservadas = self._reservar_regiones(mundo, self._regiones, gs)
-        libres = [r for r in mundo.robots if r.necesita_objetivo]
-        if not libres:
+
+        robots = list(mundo.robots)
+        if not robots:
             return
+
+        fracciona = getattr(self.cfg, "reasignar_umbral_costo", 0.7)
+
+        # Frontera que persigue cada robot en este ciclo (si su goal casa).
+        objetivos_previos = {k: self._frontera_de_robot(r, self._regiones, gs)
+                             for k, r in enumerate(robots)}
+
+        # Lista de prioridad por costo: (costo, robot_idx, target) ascendente.
+        pares = []
+        for k, r in enumerate(robots):
+            for t in self._regiones:
+                pares.append((_costo_frontera(r, t["celdas"], gs), k, t))
+        pares.sort(key=lambda p: (p[0], p[1]))
+
+        reservadas = set()   # fronteras ya tomadas (una sola vez)
+        asignados = {}       # robot_idx -> frontera asignada este ciclo
+        tomado_esta = set()  # robots que ya consiguieron frontera este ciclo
+
+        for costo, k, t in pares:
+            if id(t) in reservadas:
+                continue  # exclusividad: ya la persigue otro robot
+            if k in tomado_esta:
+                continue  # este robot ya consiguio su frontera de menor costo
+            r = robots[k]
+            previo = objetivos_previos.get(k)
+            # Identidad de la frontera por celda del centroide (los objetos
+            # target se regeneran en cada plan_interval_s, asi que id() no
+            # sirve para comparar igualdad entre ciclos).
+            celda_t = (int(t["y"] // gs), int(t["x"] // gs))
+            misma_frontera = False
+            if previo is not None:
+                celda_previo = (int(previo["y"] // gs), int(previo["x"] // gs))
+                misma_frontera = celda_previo == celda_t
+            # Robot ocupado persiguiendo OTRA frontera distinta a la actual:
+            # solo cambia si la nueva es significativamente mas barata.
+            if (previo is not None and not misma_frontera
+                    and not r.necesita_objetivo):
+                c_actual = _costo_frontera(r, previo["celdas"], gs)
+                if costo >= c_actual * fracciona:
+                    continue  # no mejora lo suficiente, conserva su objetivo
+            # El par vino en orden ascendente de costo: es la frontera de menor
+            # costo disponible para este robot.
+            asignados[k] = t
+            tomado_esta.add(k)
+            reservadas.add(id(t))
+
+        # Barrido final: robots libres/sin frontera que quedaron fuera reciben la
+        # frontera disponible de menor costo (nunca quedan parados). Si no
+        # quedan fronteras LIBRES, reciben la de menor costo aunque ya este
+        # reservada: como prioridad respetan la exclusividad, pero si faltan
+        # fronteras los robots no se quedan parados (cooperan en la misma).
         disponibles = [t for t in self._regiones if id(t) not in reservadas]
-        while libres and disponibles:
-            mejor = None
-            for r in libres:
-                for t in disponibles:
-                    d = math.hypot(r.x - t["x"], r.y - t["y"])
-                    if mejor is None or d < mejor[0]:
-                        mejor = (d, r, t)
-            if mejor is None:
-                break
-            _, r, t = mejor
+        pendientes = [k for k, r in enumerate(robots)
+                      if (k not in tomado_esta
+                          and (r.necesita_objetivo or k not in asignados))]
+        for k in pendientes:
+            r = robots[k]
+            if disponibles:
+                mejor_t = min(disponibles,
+                              key=lambda t: _costo_frontera(r, t["celdas"], gs))
+                disponibles.remove(mejor_t)
+            else:
+                mejor_t = min(self._regiones,
+                              key=lambda t: _costo_frontera(r, t["celdas"], gs))
+            asignados[k] = mejor_t
+            tomado_esta.add(k)
+            reservadas.add(id(mejor_t))
+
+        # Aplicar asignaciones. Si el robot ya tiene un goal practicamente igual al
+        # centroide (misma celda), no se re-planifica: conserva su ruta en curso.
+        for k, t in asignados.items():
+            r = robots[k]
+            celda_goal = (int(r.goal[1] // gs), int(r.goal[0] // gs)) if r.goal else None
+            celda_target = (int(t["y"] // gs), int(t["x"] // gs))
+            if (r.goal is not None and not r.necesita_objetivo
+                    and celda_goal == celda_target):
+                continue  # ya va hacia esa frontera
             r.asignar_objetivo(t["x"], t["y"], mundo)
-            self._reservas[mundo.robots.index(r)] = (int(t["y"] // gs), int(t["x"] // gs))
-            libres.remove(r)
-            disponibles.remove(t)
+            self._reservas[k] = (int(t["y"] // gs), int(t["x"] // gs))
 
     def _asignar_voronoi(self, mundo, gs):
         """Asignacion Voronoi: cada robot recibe en exclusiva la region cuyo

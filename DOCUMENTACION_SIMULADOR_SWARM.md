@@ -201,14 +201,17 @@ Implementa las tres familias de *target generation* descritas en el estado del a
 (survey de Wang et al., *Multi-Robot System for Cooperative Exploration in Unknown Environments*):
 
 - **`_celdas_frontera(mundo)`**: máscara de celdas frontera = celda libre y conocida adyacente a
-  una celda desconocida (4-vecindad, usando `np.roll` sobre la máscara de desconocidas). Es la
-  definición clásica de Yamauchi.
-- **`_agrupar_regiones(mask, min_size)`**: agrupa celdas frontera conexas por 4-vecindad mediante
-  una búsqueda en profundidad (pila); se descartan regiones menores a `frontier_min_size` (filtra
-  ruido).
-- **`FrontierBased`** (Yamauchi): un objetivo por región = **centroide** de la región. El puntaje
-  es el tamaño de la región. Rápido, pero genera objetivos que a veces traen poca información
-  nueva.
+  una celda desconocida en **8-direcciones** (incluye diagonales, usando `np.roll` sobre la máscara
+  de desconocidas). Es la definición clásica de Yamauchi extendida: se detectan más fronteras y
+  regiones con esquinas tocadas se cuentan como una sola.
+- **`_agrupar_regiones(mask, min_size, max_size=None)`**: agrupa celdas frontera conexas por
+  **8-vecindad** mediante búsqueda con pila; se descartan regiones menores a `frontier_min_size`
+  (filtra ruido) y las regiones mayores a `frontier_max_size` se **dividen en chunks de a lo más
+  `frontier_max_size` celdas** (flood-fill BFS), cada uno una entidad independiente.
+- **`FrontierBased`** (Yamauchi): un objetivo por entidad = la **celda de la frontera más cercana
+  al centroide medio** de la entidad (siempre navegable; una frontera de 1 celda se comporta como
+  celda individual). El puntaje es el tamaño de la entidad. Rápido, pero genera objetivos que a
+  veces traen poca información nueva.
 - **`SampleBased`** (next-best-view, González-Baños): muestrea `sample_candidates` puntos de vista
   cerca de la frontera y los puntúa como `ganancia - sample_cost_weight * costo`, donde:
   - `ganancia = _ganancia()`: número de celdas desconocidas con línea de vista que quedarían
@@ -230,19 +233,32 @@ Implementa las tres familias de *target generation* descritas en el estado del a
   
   Cada `plan_interval_s`: regenera las regiones de frontera y asigna tareas:
   
-  - **Frontier/Hybrid — emparejamiento por cercanía con reserva exclusiva**: en cada ciclo se
-    busca el par (robot libre, región no reservada) **de menor distancia** (emparejamiento greedy
-    mínimo global). La región queda **reservada en exclusiva** hasta que el robot completa su
-    objetivo; luego queda libre y en el siguiente ciclo se reasigna la siguiente más cercana.
-    Primero `_reservar_regiones()` protege las regiones cuyo centroide sigue cerca del objetivo
-    actual de cada robot ocupado.
+  - **Frontier/Hybrid — asignación dinámica por costo con reserva exclusiva
+    (`_asignar_dinamico`)**: las celdas de frontera se agrupan en entidades
+    (regiones 8-conectadas, divividas si superan `frontier_max_size`, por
+    defecto `grid_size // 2`) y cada entidad tiene un único objetivo en la
+    celda más cercana a su centroide. Cada ciclo se recalculan los costos de
+    TODAS las entidades contra TODOS los robots con la posición actual:
+    `costo = distancia_al_centroide / (celdas_de_la_frontera + 1)`
+    (más celdas -> menor costo; más distancia -> mayor costo). La lista de
+    prioridad ordena los pares por costo creciente y cada entidad se reserva
+    **en exclusiva para un solo robot**.
+  - **Reasignación en tránsito**: un robot ocupado conserva su frontera salvo
+    que aparezca otra disponible con costo menor a
+    `reasignar_umbral_costo` veces el actual (default 0.7, es decir ~30% más
+    barata), lo que hace que atienda primero las fronteras cercanas que van
+    descubriendo en el camino. Una frontera de 1 celda se comporta como celda
+    individual. Si un robot queda libre y no hay fronteras libres, cae a la de
+    menor costo aunque esté reservada (no queda parado).
   - **Sample Based — asignación por puntaje**: conserva su asignación por puntaje de ganancia,
     eligiendo el robot libre más cercano con preferencia de línea de vista.
   - Los objetivos inalcanzables (sin ruta A*) se marcan como `no_go` temporalmente.
   
   **Por qué reservar regiones:** evitar que varios robots vayan a la misma frontera (solapamiento
   de trayectorias). La reserva exclusiva es lo que produce la **distribución espacial** del
-  enjambre; sin ella la estrategia degenera en todo el grupo yendo al mismo lugar.
+  enjambre; sin ella la estrategia degenera en todo el grupo yendo al mismo lugar. La priorización
+  por `distancia / (celdas + 1)` balancea dos fuerzas contrarias: ir a la frontera **más cercana**
+  (minimizar recorrido) y a la **más grande** (maximizar información nueva por viaje).
 
 #### `src/robots/robot.py` — el robot
 

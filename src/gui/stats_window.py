@@ -26,6 +26,8 @@ _PARAM_LABELS = {
     "goal_reached_radius_px": "Radio llegada (px)",
     "goal_timeout_s": "Timeout objetivo (s)",
     "frontier_min_size": "Frontera min (celdas)",
+    "frontier_max_size": "Frontera max (celdas)",
+    "reasignar_umbral_costo": "Umbral reasig. costo",
     "sample_candidates": "Candidatos muestreo",
     "sample_per_cluster": "Puntos por region",
     "sample_cost_weight": "Peso del costo",
@@ -353,7 +355,7 @@ class StatsWindow:
         self._build_param_section(f, "Planificacion",
             ["plan_interval_s", "goal_reached_radius_px", "goal_timeout_s"])
         self._build_param_section(f, "Fronteras (Frontier / Hybrid Based)",
-            ["frontier_min_size"])
+            ["frontier_min_size", "frontier_max_size", "reasignar_umbral_costo"])
         self._build_param_section(f, "Muestreo (Sample / Hybrid Based)",
             ["sample_candidates", "sample_per_cluster", "sample_cost_weight", "sample_targets"])
         self._build_param_section(f, "Movimiento dirigido (Frontier / Sample / Hybrid Based)",
@@ -494,6 +496,10 @@ class StatsWindow:
             cfg.goal_timeout_s = val
         elif key == "frontier_min_size":
             cfg.frontier_min_size = int(val)
+        elif key == "frontier_max_size":
+            cfg.frontier_max_size = int(val)
+        elif key == "reasignar_umbral_costo":
+            cfg.reasignar_umbral_costo = val
         elif key == "sample_candidates":
             cfg.sample_candidates = int(val)
         elif key == "sample_per_cluster":
@@ -528,6 +534,8 @@ class StatsWindow:
             "goal_reached_radius_px": str(cfg.goal_reached_radius_px),
             "goal_timeout_s": str(cfg.goal_timeout_s),
             "frontier_min_size": str(cfg.frontier_min_size),
+            "frontier_max_size": str(cfg.frontier_max_size),
+            "reasignar_umbral_costo": str(cfg.reasignar_umbral_costo),
             "sample_candidates": str(cfg.sample_candidates),
             "sample_per_cluster": str(cfg.sample_per_cluster),
             "sample_cost_weight": str(cfg.sample_cost_weight),
@@ -559,6 +567,8 @@ class StatsWindow:
                 f"goal_reached_radius_px={cfg.goal_reached_radius_px}",
                 f"goal_timeout_s={cfg.goal_timeout_s}",
                 f"frontier_min_size={cfg.frontier_min_size}",
+                f"frontier_max_size={cfg.frontier_max_size}",
+                f"reasignar_umbral_costo={cfg.reasignar_umbral_costo}",
                 f"sample_candidates={cfg.sample_candidates}",
                 f"sample_per_cluster={cfg.sample_per_cluster}",
                 f"sample_cost_weight={cfg.sample_cost_weight}",

@@ -24,8 +24,7 @@ class Renderer:
         if ver_fronteras and plan is not None and getattr(plan, "frontera_mask", None) is not None:
             self._draw_fronteras(mundo, plan.frontera_mask)
         if ver_voronoi:
-            self._draw_capa_voronoi(mundo, plan, plan_inspeccion,
-                                    ver_triangulacion)
+            self._draw_capa_voronoi(mundo, plan, plan_inspeccion)
         self._draw_grid(mundo)
         self._draw_walls(mundo)
         # Los resultados de inspeccion (probando/sana/defectuosa) se dibujan
@@ -39,6 +38,11 @@ class Renderer:
         self._draw_robots(mundo)
         if mundo.robots:
             self._draw_robot_thumbnails(mundo)
+        # La triangulacion es una capa superior: queda por encima de todo.
+        if ver_triangulacion and mundo.etapa == "inspeccion":
+            viz = getattr(plan_inspeccion, "viz", None)
+            if viz is not None:
+                self._dibujar_triangulacion(mundo, viz.get("arbol", []))
 
     def _draw_inspeccion(self, mundo: Mundo):
         """Dibuja el resultado visible de la inspeccion de baldosas, que es el
@@ -307,25 +311,31 @@ class Renderer:
             paleta.append((int(r * 255), int(g * 255), int(b * 255)))
         return paleta
 
-    def _draw_capa_voronoi(self, mundo, plan, plan_inspeccion,
-                           ver_triangulacion=False):
+    def _draw_capa_voronoi(self, mundo, plan, plan_inspeccion):
         """Orquesta la capa segun que voronoi esta activo.
 
-        - Etapa de Inspeccion: `InspeccionVoronoi` (Fase 3, jerarquico). Muestra
-          los bordes del primer Voronoi (nivel 0) y las tareas reveladas de
-          forma progresiva; con `ver_triangulacion` (checkbox) pinta ademas el
-          mapa de celdas por generacion de recursion.
+        - Etapa de Inspeccion: `InspeccionVoronoi` (Fase 3, descomposicion
+          recursiva con barrera de generacion por region). Muestra los
+          bordes del primer Voronoi (nivel 0) y las tareas de la generacion
+          activa (numeros con colores).
         - Etapa de Exploracion: `VoronoiExploracion` (Fase 2, particion por robot).
         """
         if mundo.etapa == "inspeccion" and plan_inspeccion is not None:
             viz = getattr(plan_inspeccion, "viz", None)
             if viz is None:
                 return
-            self._dibujar_bordes(mundo, viz["nivel0"])
-            if ver_triangulacion:
-                self._dibujar_mapa_niveles(mundo, viz["niveles"])
+            if "nivel0" in viz and viz["nivel0"] is not None:
+                self._dibujar_bordes(mundo, viz["nivel0"])
+            # Dibujar contornos de Voronoi Gen 0
+            for poly, _, _ in viz.get("figuras_gen0", []):
+                if len(poly) >= 3:
+                    pts = [(int(p[0]), int(p[1])) for p in poly]
+                    pts.append(pts[0])
+                    pygame.draw.lines(self.screen, (240, 230, 255), False, pts, 2)
+            # Dibujar lineas de los triangulos de la triangulacion recursiva
+            self._dibujar_lineas_triangulos(mundo, viz.get("triangulos", []))
             self._dibujar_tareas_inspeccion(mundo, plan_inspeccion,
-                                            viz["tareas"])
+                                            viz.get("tareas", []))
             return
         gen = getattr(plan, "_generador", None)
         if isinstance(gen, VoronoiExploracion) and gen._viz.get("mapa") is not None:
@@ -341,33 +351,37 @@ class Renderer:
         r, g, b = colorsys.hsv_to_rgb(0.65 * t, 0.60, 0.95)
         return (int(r * 255), int(g * 255), int(b * 255))
 
-    def _dibujar_mapa_niveles(self, mundo, niveles, alpha=100):
-        """Colorea cada celda segun su generacion en el arbol estatico de
-        triangulacion (0-based): raices (nivel 0) en azul, profundo en rojo.
-        Solo se usa bajo el checkbox 'Ver triangulacion'."""
-        gs = mundo.cfg.grid_size
-        vals = niveles[niveles >= 0]
-        if not vals.size:
-            return
-        vmax = int(vals.max()) or 1
-        rows, cols = mundo.rows, mundo.cols
-        overlay = pygame.Surface((cols * gs, rows * gs), pygame.SRCALPHA)
-        for r in range(rows):
-            for c in range(cols):
-                nv = int(niveles[r, c])
-                if nv < 0:
-                    continue
-                col = self._hue_escala(nv, vmax)
-                pygame.draw.rect(overlay, (col[0], col[1], col[2], alpha),
-                                 (c * gs, r * gs, gs, gs))
-        self.screen.blit(overlay, (0, 0))
+    def _dibujar_lineas_triangulos(self, mundo, triangulos):
+        """Dibuja las aristas de los triangulos de la triangulacion recursiva."""
+        for tri, nivel, raiz_id in triangulos:
+            if len(tri) >= 3:
+                pts = [(int(p[0]), int(p[1])) for p in tri]
+                pts.append(pts[0])
+                col = (190, 190, 220) if nivel == 1 else (135, 135, 165)
+                pygame.draw.lines(self.screen, col, False, pts, 1)
 
-    def _hue_escala(self, nivel, vmax):
-        """Hue escalado de profundidad 0-based: azul (nivel 0) -> rojo (vmax)."""
-        t = 0.0 if vmax <= 0 else nivel / vmax
-        hue = 0.65 - 0.65 * t
-        r, g, b = colorsys.hsv_to_rgb(hue, 0.70, 1.0)
-        return (int(r * 255), int(g * 255), int(b * 255))
+    def _dibujar_triangulacion(self, mundo, arbol):
+        """Triangulacion recursiva como capa superior: dibuja con lineas
+        blancas el contorno de cada figura y sub-figura del arbol, y un punto
+        blanco en el centroide de cada una. Recorre el arbol recursivamente
+        en profundidad (gen0 -> gen1 -> gen2 -> ...).
+        `arbol` es la lista de nodos {centroide: (r,c), vertices: [(px,py)...],
+        nivel: int, hijos: [...]}."""
+        gs = mundo.cfg.grid_size
+        for nodo in arbol:
+            verts = nodo.get("vertices") or []
+            if len(verts) >= 3:
+                pts = [(int(x), int(y)) for (x, y) in verts]
+                pts.append(pts[0])
+                pygame.draw.lines(self.screen, (255, 255, 255), False, pts, 1)
+            cr, cc = nodo["centroide"]
+            px = cc * gs + gs / 2
+            py = cr * gs + gs / 2
+            pygame.draw.circle(self.screen, (255, 255, 255),
+                               (int(px), int(py)), max(2, gs // 4))
+            hijos = nodo.get("hijos")
+            if hijos:
+                self._dibujar_triangulacion(mundo, hijos)
 
     def _dibujar_mapa_particion(self, mundo, mapa, alpha=110):
         """Pinta cada celda segun su sitio (region). `mapa` es un array de
@@ -406,18 +420,20 @@ class Renderer:
                                      ((c + 1) * gs, r * gs), ((c + 1) * gs, r * gs + gs), 1)
 
     def _dibujar_tareas_inspeccion(self, mundo, planificador, tareas):
-        """Tareas reveladas de forma progresiva (padre antes que hijo): solo se
-        dibuja la tarea cuyo padre ya fue inspeccionado (misma condicion que la
-        subasta estricta). El numero es la generacion de recursion (0 = region
-        raiz del primer Voronoi) y su color es el heatmap INVERTIDO del interes
-        (`peso * ajuste`): rojo = interes bajo = urgente; azul = interes alto =
-        menos prioritario. La celda inspeccionada ya esta pintada por el
-        resultado (SANA/DEFECTUOSA), asi que no se repite aqui."""
+        """Tareas de la generacion activa (barrera por region raiz): solo se
+        dibuja la tarea cuyo nivel coincide con el minimo nivel sin inspeccionar
+        de su region (`generaciones_activas` + `tarea_elegible`). El numero es
+        la generacion de recursion (0 = region raiz del primer Voronoi) y su
+        color es el heatmap INVERTIDO del interes (`peso * ajuste`): rojo =
+        interes bajo = urgente; azul = interes alto = menos prioritario. La
+        celda inspeccionada ya esta pintada por el resultado (SANA/DEFECTUOSA),
+        asi que no se repite aqui."""
         gs = mundo.cfg.grid_size
+        generaciones = planificador.generaciones_activas(mundo)
         visibles = [t for t in tareas
-                    if planificador.tarea_revelada(mundo, t)
+                    if planificador.tarea_elegible(t, generaciones, mundo)
                     and not mundo.inspec[t["r"], t["c"]]]
-        valores = [t["peso"] * t["ajuste"] for t in visibles]
+        valores = [t.get("coste_acumulado", t.get("peso", 1.0) * t.get("ajuste", 1.0)) for t in visibles]
         vmin = min(valores) if valores else 1.0
         vmax = max(valores) if valores else 1.0
         rango = max(vmax - vmin, 1e-6)

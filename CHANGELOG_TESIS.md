@@ -1195,6 +1195,18 @@ Esta sección documenta los desarrollos correspondientes a la Fase 4 de la tesis
 - **Integración Multimodal**:
   - Soporte de Voronoi e Inspección Boustrophedon tanto en modo de inspección pura como en estrategias de dos etapas / híbridas.
 
+### 1.6 Modelos RL Invariantes a la Escala y Descentralizados (V3-DES y V3-EXP)
+- **Generalización Multi-Agente Invariante**:
+  - Se implementó la arquitectura descentralizada con compartición de pesos (*parameter sharing*), permitiendo ejecutar modelos entrenados sobre **cualquier cantidad de robots ($N$)** y en **mapas de cualquier dimensión ($R \times C$)** mediante observación egocéntrica local ($K \times K$).
+- **V3-DES (Inspección/Híbrido con Alerta y Energía)** (`SwarmEnvDescentralizado`, `RLControllerV3DES`):
+  - Incorpora indicador de alerta difuso entre robots ante hallazgos de celdas defectuosas (`radio_alerta_px`), penalización por inactividad y penalización por consumo de energía.
+- **V3-EXP (Exploración Pura Descentralizada)** (`SwarmEnvExploracionDescentralizado`, `RLControllerExploracionV3`):
+  - Modelo enfocado exclusivamente en maximizar el descubrimiento rápido del mapa (niebla a descubierto).
+  - Incluye **señales de descubrimiento cooperativo**: cada robot percibe en tiempo real si los vecinos en su radio de comunicación están descubriendo activamente nuevas fronteras para coordinar el avance o dispersarse.
+  - Penalización por consumo de energía de locomoción.
+  - Script de entrenamiento: `train_rl_v3_exp.py`.
+
+
 ## 2. Archivos creados y modificados
 
 | Archivo | Tipo | Cambio |
@@ -1212,3 +1224,10 @@ Esta sección documenta los desarrollos correspondientes a la Fase 4 de la tesis
 | `src/gui/stats_window.py` | mod | Soporte de UI para elegir modos/estrategias Voronoi, Boustrophedon y RL. |
 | `config/default.yaml` | mod | Nuevas entradas de configuración para modelos RL y parámetros de inspección. |
 | `CHANGELOG_TESIS.md` | mod | Inclusión de esta documentación de cambios. |
+
+## 5. Cambios realizados en esta sesión (8 de septiembre de 2026)
+
+- **src/algorithms/inspeccion.py**: Añadida la clase `Figura` y revisada la lógica de generación Voronoi y triangulación recursiva según los últimos requerimientos.
+- **src/gui/renderer.py**: Implementado dibujo de bordes Voronoi y líneas de triangulación para visualización de la nueva geometría.
+- **tests/test_voronoi_triangulacion.py**: Nuevas pruebas unitarias que cubren la generación Voronoi, la recursividad de triangulación y la propagación de costes.
+- **CHANGELOG_TESIS.md**: Actualizada con esta entrada de changelog.

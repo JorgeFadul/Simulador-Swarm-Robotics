@@ -7,14 +7,15 @@ DEFAULT_PATH = Path(__file__).resolve().parents[2] / "config" / "default.yaml"
 # --- Listas de estrategias por categoria ---
 ESTRATEGIAS_EXPLORACION = (
     "Random Walk", "Frontier Based", "Sample Based",
-    "Hybrid Based", "Boustrophedon", "RL Exploracion",
+    "Hybrid Based", "Boustrophedon", "RL Exploracion", "RL Exploracion V3",
 )
 ESTRATEGIAS_INSPECCION = (
     "Random Walk", "Voronoi", "Boustrophedon Inspeccion", "RL Inspeccion",
 )
 ESTRATEGIAS_HIBRIDO = (
-    "Random Walk Hibrido", "RL Hibrido", "RL Hibrido V2",
+    "Random Walk Hibrido", "RL Hibrido", "RL Hibrido V2", "RL Hibrido V3",
 )
+
 
 # Compatibilidad: todas las estrategias validas
 ESTRATEGIAS_VALIDAS = ESTRATEGIAS_EXPLORACION + ESTRATEGIAS_INSPECCION + ESTRATEGIAS_HIBRIDO
@@ -70,6 +71,9 @@ class Config:
         self.goal_reached_radius_px: float = float(raw.get("goal_reached_radius_px", 15.0))
         self.goal_timeout_s: float = float(raw.get("goal_timeout_s", 10.0))
         self.frontier_min_size: int = int(raw.get("frontier_min_size", 3))
+        self.frontier_max_size: int = int(
+            raw.get("frontier_max_size", 0) or (self.grid_size // 2))
+        self.reasignar_umbral_costo: float = float(raw.get("reasignar_umbral_costo", 0.7))
         self.sample_candidates: int = int(raw.get("sample_candidates", 40))
         self.sample_per_cluster: int = int(raw.get("sample_per_cluster", 8))
         self.sample_cost_weight: float = float(raw.get("sample_cost_weight", 0.02))
@@ -122,6 +126,12 @@ class Config:
         self.inspeccion_peso_generacion: float = float(raw.get("inspeccion_peso_generacion", 1.5))
         self.inspeccion_factor_sano: float = float(raw.get("inspeccion_factor_sano", 1.5))
         self.inspeccion_factor_defectivo: float = float(raw.get("inspeccion_factor_defectivo", 0.6))
+        # Cola de tareas fallidas: una tarea que un robot no logro alcanzar
+        # (timeout de objetivo) se aparca por cooldown y no se vuelve a ofrecer
+        # hasta haber fallado `fallos_para_perdonar` veces, para no bloquear la
+        # generacion activa de su region con objetivos fisicamente inalcanzables.
+        self.inspeccion_fallos_para_perdonar: int = int(raw.get("inspeccion_fallos_para_perdonar", 2))
+        self.inspeccion_cooldown_fallo_s: float = float(raw.get("inspeccion_cooldown_fallo_s", 25.0))
 
         # Transicion (para modo hibrido: umbral de descubrimiento)
         trans = raw.get("transicion", {}) or {}
@@ -262,6 +272,7 @@ class Config:
                     "exploration_goal", "plan_interval_s",
                     "goal_reached_radius_px", "goal_timeout_s",
                     "sample_cost_weight",
+                    "reasignar_umbral_costo",
                     "dirigido_avance_min",
                     "dirigido_peso_evasion_imminente",
                     "dirigido_peso_evasion_fuerte",
@@ -273,6 +284,7 @@ class Config:
                     "inspeccion_peso_generacion",
                     "inspeccion_factor_sano",
                     "inspeccion_factor_defectivo",
+                    "inspeccion_cooldown_fallo_s",
                     "defecto_prob_ortogonal",
                     "defecto_prob_diagonal",
                     "defecto_decaimiento"):
@@ -282,8 +294,9 @@ class Config:
                 except ValueError:
                     continue
 
-        for key in ("frontier_min_size", "sample_candidates",
-                    "sample_per_cluster", "sample_targets", "defecto_num_blobs"):
+        for key in ("frontier_min_size", "frontier_max_size", "sample_candidates",
+                    "sample_per_cluster", "sample_targets", "defecto_num_blobs",
+                    "inspeccion_fallos_para_perdonar"):
             if key in data:
                 try:
                     setattr(self, key, int(data[key]))

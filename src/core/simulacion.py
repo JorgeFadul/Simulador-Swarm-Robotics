@@ -94,10 +94,26 @@ class Simulacion:
                 return None  # sin planner: movimiento autonomo del robot
             if strat in ("Frontier Based", "Sample Based", "Hybrid Based"):
                 return ExplorationPlanner(self.cfg, strat, self.rng)
-            # RL Exploracion: por ahora retorna None (placeholder)
+            if strat == "RL Exploracion V3":
+                try:
+                    from ..rl.controller import RLControllerExploracionV3
+                    model_path = getattr(self.cfg, "rl_exploracion_v3_model", "models/v3_exp/final_v3_exp.zip")
+                    return RLControllerExploracionV3(model_path=model_path, auto_assign=True)
+                except Exception as e:
+                    print(f"[RL Exploracion V3] No se pudo cargar el modelo: {e}")
+                    return None
             return None
 
         # Modo hibrido: RL Hibrido usa un controlador RL como planner
+        if self.cfg.estrategia_hibrido == "RL Hibrido V3":
+            try:
+                from ..rl.controller import RLControllerV3DES
+                model_path = getattr(self.cfg, "rl_hibrido_v3_model", "models/v3_des/final_v3_des.zip")
+                return RLControllerV3DES(model_path=model_path, auto_assign=True)
+            except Exception as e:
+                print(f"[RL Hibrido V3] No se pudo cargar el modelo: {e}")
+                return None
+
         if self.cfg.estrategia_hibrido in ("RL Hibrido", "RL Hibrido V2"):
             # El controlador usa la geometria del mundo actual.
             # El modelo debe haber sido entrenado con los mismos dimensiones.
@@ -127,6 +143,7 @@ class Simulacion:
                 return None
         # Las demas estrategias hibridas (p.ej. Random Walk Hibrido) no usan planner
         return None
+
 
     def _crear_planner_inspeccion(self):
         """Crea el planner de inspeccion segun `estrategia_inspeccion`."""
@@ -329,13 +346,14 @@ class Simulacion:
                 (modo == "dos_etapas" and self.etapa == "inspeccion")):
             self.planner_inspeccion.actualizar(m)
         elif self.planner:
-            if modo == "dos_etapas":
-                self.planner.actualizar(m, self.tiempo_simulado)
-            elif modo == "hibrido":
-                # El controlador RL (o la estrategia hibrida con planner) se
-                # actualiza cada ciclo
-                if hasattr(self.planner, "actualizar"):
+            if hasattr(self.planner, "actualizar"):
+                import inspect
+                sig = inspect.signature(self.planner.actualizar)
+                if len(sig.parameters) >= 2:
+                    self.planner.actualizar(m, self.tiempo_simulado)
+                else:
                     self.planner.actualizar(m)
+
 
         m.update(0.05)
         self.tiempo_simulado += 0.05

@@ -37,6 +37,13 @@ plan_interval_s: 1.0
 goal_reached_radius_px: 15
 goal_timeout_s: 10.0
 frontier_min_size: 1
+# Tamano maximo de una entidad de frontera (celdas). 0 = automatico:
+# grid_size // 2 (10 celdas con grid de 20). Las fronteras mas grandes que
+# este valor se dividen en entidades conectadas mas pequenas.
+frontier_max_size: 0
+# Fraccion de mejora de costo necesaria para reasignar a un robot en transito
+# (0.7 = la nueva frontera debe costar al menos 30% menos que la actual).
+reasignar_umbral_costo: 0.7
 sample_candidates: 40
 sample_per_cluster: 8
 sample_cost_weight: 0.02
@@ -66,11 +73,18 @@ inspeccion_pausa_s: 1.0
 auction_defectivo_factor: 0.15
 auction_sano_factor: 0.25
 auction_profundidad_p: 0.97
-# Nueva semantica: estricto padre->hijos, peso por generacion, ajuste dinamico.
+# Nueva semantica: barrera por generacion y region raiz, peso por generacion,
+# ajuste dinamico y cola de tareas fallidas. `inspeccion_padre_antes_hijo`
+# queda obsoleto (se conserva por compatibilidad de YAMLs).
 inspeccion_padre_antes_hijo: true
 inspeccion_peso_generacion: 1.5
 inspeccion_factor_sano: 1.5
 inspeccion_factor_defectivo: 0.6
+# Tareas fallidas: aparcar una tarea tras N timeouts y no volverla a ofrecer
+# durante `cooldown` segundos, para no bloquear la generacion activa de su
+# region raiz con objetivos fisicamente inalcanzables.
+inspeccion_fallos_para_perdonar: 2
+inspeccion_cooldown_fallo_s: 25.0
 
 # --- Inspeccion de baldosas ---
 prob_defecto: 0.2

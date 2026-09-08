@@ -1,4 +1,4 @@
-﻿import math
+import math
 import numpy as np
 from ..core.config import Config
 from ..core.mundo import Mundo, SCOUTED, VISITED, DISCOVERED
@@ -917,6 +917,25 @@ class Robot:
                 p = mundo.descubrir_pared_frontal(self.x, self.y, self.angle, self.radius)
                 self.paredes_robot += p
                 self._explorar_propio_colision(mundo)
+
+                # --- Rutina de recuperación leve (Push-out & Anti-Stuck) ---
+                # Si el robot está atascado contra un obstáculo, aplique una leve separación cinemática
+                # (1 a 2 px) en la dirección del vector de repulsión si existe espacio libre,
+                # o gire 45° a 90° lejos de la pared para desbloquear su trayectoria.
+                if has_obs and (rep_dx != 0 or rep_dy != 0):
+                    sep_x = self.x + rep_dx * 2.0
+                    sep_y = self.y + rep_dy * 2.0
+                    if mundo.circulo_en_libre(sep_x, sep_y, self.radius):
+                        self.x, self.y = sep_x, sep_y
+
+                self._sin_avance += dt
+                if self._sin_avance > 0.5:
+                    # Ajuste leve de rumbo para desbloquear orientaciones pegadas a la pared
+                    self.angle += self.rng.choice([math.radians(45), math.radians(-45), math.radians(90)])
+                    self.angle = math.atan2(math.sin(self.angle), math.cos(self.angle))
+                    self.target_angle = self.angle
+                    self._sin_avance = 0.0
+
                 if self.goal_mode and self.goal is not None and not self.goal_alcanzado:
                     self.ruta = encontrar_ruta(mundo, self.x, self.y, self.goal[0], self.goal[1])
                     if not self.ruta:
@@ -927,6 +946,7 @@ class Robot:
                     self._elegir_nuevo_recorrido()
             else:
                 self.x, self.y = nx, ny
+                self._sin_avance = 0.0
                 # Rasterizacion de visita por area (radio del robot): cubre
                 # tambien las casillas libres adyacentes a paredes, evitando
                 # huecos de casillas sin visitar en los bordes de las paredes.
@@ -941,6 +961,7 @@ class Robot:
                     if self.cfg.inspeccionar_al_visitar and (
                             mundo.etapa == "inspeccion" or self.cfg.modo_fase == "hibrido"):
                         self.inspeccionar_actual(mundo)
+
 
         exp_radius = self.detection_radius * self.cfg.exploration_radius_multiplier
         s, p = mundo.explorar_desde(self.x, self.y, exp_radius)
