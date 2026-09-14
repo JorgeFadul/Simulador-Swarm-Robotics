@@ -5,6 +5,7 @@ from PIL import Image, ImageTk
 from ..core.mundo import SCOUTED, VISITED, DISCOVERED
 from ..core.config import (
     ESTRATEGIAS_EXPLORACION, ESTRATEGIAS_INSPECCION, ESTRATEGIAS_HIBRIDO,
+    MAX_GEN_VISIBLE,
 )
 
 COL_SCOUTED = (0, 100, 0)
@@ -37,6 +38,8 @@ _PARAM_LABELS = {
     "dirigido_peso_evasion_fuerte": "Peso evasion fuerte",
     "dirigido_peso_evasion_suave": "Peso evasion suave",
     "dirigido_umbral_giro_deg": "Umbral giro (deg)",
+    "dirigido_giro_kp": "Ganancia giro proporcional",
+    "dirigido_pivote_umbral_deg": "Umbral pivote (deg)",
 }
 
 
@@ -208,6 +211,19 @@ class StatsWindow:
         ttk.Checkbutton(vis_frame, text="Triangulacion", variable=self.ver_triangulacion_var,
                         command=self._aplicar_visual).pack(side="left", padx=2)
 
+        ttk.Separator(f, orient="horizontal").pack(fill="x", pady=(8, 2))
+        ttk.Label(f, text="Generaciones de triangulacion (ver/ocultar):",
+                  font=("Arial", 10, "bold")).pack(anchor="w")
+        gen_frame = ttk.Frame(f)
+        gen_frame.pack(fill="x", pady=4)
+        self.ver_gen_vars = {}
+        for g in range(1, MAX_GEN_VISIBLE + 1):
+            var = tk.BooleanVar(value=self.sim.ver_generaciones.get(g, True))
+            self.ver_gen_vars[g] = var
+            ttk.Checkbutton(gen_frame, text=f"G{g}", variable=var,
+                            command=self._aplicar_visual).grid(
+                row=(g - 1) // 5, column=(g - 1) % 5, padx=2, pady=2, sticky="w")
+
         ttk.Separator(f, orient="horizontal").pack(fill="x", pady=8)
 
         # --- Etapa y transicion (modo dos etapas) ---
@@ -359,7 +375,8 @@ class StatsWindow:
         self._build_param_section(f, "Muestreo (Sample / Hybrid Based)",
             ["sample_candidates", "sample_per_cluster", "sample_cost_weight", "sample_targets"])
         self._build_param_section(f, "Movimiento dirigido (Frontier / Sample / Hybrid Based)",
-            ["dirigido_avance_min", "dirigido_umbral_giro_deg"])
+            ["dirigido_avance_min", "dirigido_umbral_giro_deg",
+             "dirigido_giro_kp", "dirigido_pivote_umbral_deg"])
         self._build_param_section(f, "Evitacion reactiva (dirigido)",
             ["dirigido_peso_evasion_imminente",
              "dirigido_peso_evasion_fuerte",
@@ -518,6 +535,10 @@ class StatsWindow:
             cfg.dirigido_peso_evasion_suave = val
         elif key == "dirigido_umbral_giro_deg":
             cfg.dirigido_umbral_giro_deg = val
+        elif key == "dirigido_giro_kp":
+            cfg.dirigido_giro_kp = val
+        elif key == "dirigido_pivote_umbral_deg":
+            cfg.dirigido_pivote_umbral_deg = val
 
     def _sync_params_from_cfg(self):
         cfg = self.sim.cfg
@@ -545,6 +566,8 @@ class StatsWindow:
             "dirigido_peso_evasion_fuerte": str(cfg.dirigido_peso_evasion_fuerte),
             "dirigido_peso_evasion_suave": str(cfg.dirigido_peso_evasion_suave),
             "dirigido_umbral_giro_deg": str(cfg.dirigido_umbral_giro_deg),
+            "dirigido_giro_kp": str(cfg.dirigido_giro_kp),
+            "dirigido_pivote_umbral_deg": str(cfg.dirigido_pivote_umbral_deg),
         }
         for key, val in mapping.items():
             if key in self._param_vars:
@@ -578,6 +601,8 @@ class StatsWindow:
                 f"dirigido_peso_evasion_fuerte={cfg.dirigido_peso_evasion_fuerte}",
                 f"dirigido_peso_evasion_suave={cfg.dirigido_peso_evasion_suave}",
                 f"dirigido_umbral_giro_deg={cfg.dirigido_umbral_giro_deg}",
+                f"dirigido_giro_kp={cfg.dirigido_giro_kp}",
+                f"dirigido_pivote_umbral_deg={cfg.dirigido_pivote_umbral_deg}",
                 f"modo_fase={cfg.modo_fase}",
                 f"estrategia_exploracion={cfg.estrategia_exploracion}",
                 f"estrategia_inspeccion={cfg.estrategia_inspeccion}",
@@ -672,6 +697,9 @@ class StatsWindow:
             self.sim.ver_voronoi = self.ver_voronoi_var.get()
         if hasattr(self, "ver_triangulacion_var"):
             self.sim.ver_triangulacion = self.ver_triangulacion_var.get()
+        if hasattr(self, "ver_gen_vars"):
+            for g, var in self.ver_gen_vars.items():
+                self.sim.ver_generaciones[g] = var.get()
 
     def _forzar_inspeccion(self):
         self.sim.forzar_transicion_inspeccion()
@@ -794,8 +822,15 @@ class StatsWindow:
 
         # Bateria del robot seleccionado
         self.bateria_bar["value"] = r.energia.porcentaje_bateria
+        info_extra = ""
+        planner = getattr(self.sim, "planner", None)
+        if planner and hasattr(planner, "cerebros") and id(r) in planner.cerebros:
+            cerebro = planner.cerebros[id(r)]
+            info_extra = f" | Dopamina: {cerebro.dopamina_actual:+.2f}"
+
         self.bateria_label.config(
-            text=f"{r.energia.porcentaje_bateria:.1f}%  ({r.energia.energia_consumida_total:.1f} J usados)")
+            text=f"{r.energia.porcentaje_bateria:.1f}%  ({r.energia.energia_consumida_total:.1f} J){info_extra}")
+
 
     def _actualizar_individual_map(self):
         self.canvas_robot_map.delete("all")

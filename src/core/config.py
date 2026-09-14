@@ -8,17 +8,23 @@ DEFAULT_PATH = Path(__file__).resolve().parents[2] / "config" / "default.yaml"
 ESTRATEGIAS_EXPLORACION = (
     "Random Walk", "Frontier Based", "Sample Based",
     "Hybrid Based", "Boustrophedon", "RL Exploracion", "RL Exploracion V3",
+    "Cerebro Mosca (Dopamina)",
 )
 ESTRATEGIAS_INSPECCION = (
     "Random Walk", "Voronoi", "Boustrophedon Inspeccion", "RL Inspeccion",
 )
 ESTRATEGIAS_HIBRIDO = (
     "Random Walk Hibrido", "RL Hibrido", "RL Hibrido V2", "RL Hibrido V3",
+    "Cerebro Mosca (Dopamina)",
 )
+
 
 
 # Compatibilidad: todas las estrategias validas
 ESTRATEGIAS_VALIDAS = ESTRATEGIAS_EXPLORACION + ESTRATEGIAS_INSPECCION + ESTRATEGIAS_HIBRIDO
+
+# Numero maximo de generaciones de triangulacion visibles/ocultables en el GUI
+MAX_GEN_VISIBLE = 10
 
 
 class Config:
@@ -48,6 +54,10 @@ class Config:
         self.exploration_threshold: float = float(raw.get("exploration_threshold", 0.99))
         self.exploration_radius_multiplier: float = float(raw.get("exploration_radius_multiplier", 1.5))
         self.robot_turn_speed_rad_s: float = float(raw.get("robot_turn_speed_rad_s", math.pi))
+
+        # Radio de vecindad para la obs RL v3: multiplicador del radio del robot.
+        self.rl_vecindad_radio_mult: float = float(raw.get("rl_vecindad_radio_mult", 5.0))
+        self.rl_vecindad_radio_px: float = self.rl_vecindad_radio_mult * self.robot_radius_px
 
         # --- Modos de simulacion y estrategias ---
         # Modo (dos opciones):
@@ -84,6 +94,19 @@ class Config:
         self.dirigido_peso_evasion_fuerte: float = float(raw.get("dirigido_peso_evasion_fuerte", 0.4))
         self.dirigido_peso_evasion_suave: float = float(raw.get("dirigido_peso_evasion_suave", 0.8))
         self.dirigido_umbral_giro_deg: float = float(raw.get("dirigido_umbral_giro_deg", 5.0))
+        # Puertas de la repulsion sobre el rumbo (ver default.yaml). La puerta
+        # suave en 0.0 hace que con dot >= 0 (obstaculo a un lado o detras) el
+        # rumbo NO se desvie: permite correr junto a paredes.
+        self.dirigido_gate_fuerte_dot: float = float(raw.get("dirigido_gate_fuerte_dot", -0.5))
+        self.dirigido_gate_suave_dot: float = float(raw.get("dirigido_gate_suave_dot", 0.0))
+        # Giro cerrado (una rueda quieta): el radio de giro nunca es menor que
+        # el radio real del robot (v/omega >= R). `dirigido_giro_kp` suaviza la
+        # correccion de rumbo (proporcional, no bang-bang) y
+        # `dirigido_pivote_umbral_deg` fija el giro grande a partir del cual,
+        # si el arco no es accesible por obstaculos frontales, se pivota en el
+        # centro (v=0).
+        self.dirigido_giro_kp: float = float(raw.get("dirigido_giro_kp", 6.0))
+        self.dirigido_pivote_umbral_deg: float = float(raw.get("dirigido_pivote_umbral_deg", 35.0))
 
         self.walls: list[dict] = raw.get("walls", [])
 
@@ -122,10 +145,30 @@ class Config:
         self.auction_profundidad_p: float = float(raw.get("auction_profundidad_p", 0.97))
         # Nueva semantica: orden estricto padre->hijos, peso creciente por
         # generacion y ajuste dinamico por resultado de inspeccion.
+        # Gate de elegibilidad en la subasta de inspeccion (tarea_elegible):
+        # True = orden estricto padre->hijo (un hijo se subasta solo al estar
+        # inspeccionado su padre directo); False = sin gate, toda tarea pendiente
+        # es subastable independientemente de su nivel.
         self.inspeccion_padre_antes_hijo: bool = bool(raw.get("inspeccion_padre_antes_hijo", True))
+        # Legacy: ya no infla el interes por generacion (el descuento
+        # generacional se aplica como `/(generacion+1)` en `_interes_total`).
+        # Se conserva por compatibilidad de YAMLs.
         self.inspeccion_peso_generacion: float = float(raw.get("inspeccion_peso_generacion", 1.5))
-        self.inspeccion_factor_sano: float = float(raw.get("inspeccion_factor_sano", 1.5))
-        self.inspeccion_factor_defectivo: float = float(raw.get("inspeccion_factor_defectivo", 0.6))
+        self.inspeccion_factor_sano: float = float(raw.get("inspeccion_factor_sano", 0.6))
+        self.inspeccion_factor_defectivo: float = float(raw.get("inspeccion_factor_defectivo", 2.0))
+        # Interes de mercado:
+        #   interes = interes_inspeccion / ((generacion+1) * distancia_A**alpha * 2^R)
+        # donde R = robots dentro de la region Gen0 de la tarea (termino
+        # dinamico anti-hacinamiento exponencial, recalculado en cada
+        # evaluacion: 1 robot divide entre 2, 2 entre 4, 3 entre 8...).
+        # El interes de inspeccion parte de 1 y cambia SOLO por el resultado de
+        # los ancestros inspeccionados de la rama (sana lo baja / defectuosa lo
+        # sube, acumulando el factor en cada generacion). La cuota generacional
+        # `(generacion+1)` reduce el interes base en cada nivel del arbol y
+        # `distancia_A**alpha` quita peso a la cercania: `inspeccion_peso_distancia`
+        # es el exponente alpha (default 0.5 = equilibrio medio: una zona con
+        # fallas a 20 s vence a una sana a 5 s).
+        self.inspeccion_peso_distancia: float = float(raw.get("inspeccion_peso_distancia", 0.5))
         # Cola de tareas fallidas: una tarea que un robot no logro alcanzar
         # (timeout de objetivo) se aparca por cooldown y no se vuelve a ofrecer
         # hasta haber fallado `fallos_para_perdonar` veces, para no bloquear la
@@ -248,6 +291,8 @@ class Config:
             self.estrategia_hibrido = data["estrategia_hibrido"]
         if "inspeccion_individual" in data:
             self.inspeccion_individual = data["inspeccion_individual"].lower() in ("true", "1", "yes")
+        if "inspeccion_padre_antes_hijo" in data:
+            self.inspeccion_padre_antes_hijo = data["inspeccion_padre_antes_hijo"].lower() in ("true", "1", "yes")
 
         # Compatibilidad: si viene "strategy" viejo, mapear al modo correspondiente
         if "strategy" in data:
@@ -278,12 +323,17 @@ class Config:
                     "dirigido_peso_evasion_fuerte",
                     "dirigido_peso_evasion_suave",
                     "dirigido_umbral_giro_deg",
+                    "dirigido_gate_fuerte_dot",
+                    "dirigido_gate_suave_dot",
+                    "dirigido_giro_kp",
+                    "dirigido_pivote_umbral_deg",
                     "auction_defectivo_factor",
                     "auction_sano_factor",
                     "auction_profundidad_p",
                     "inspeccion_peso_generacion",
                     "inspeccion_factor_sano",
                     "inspeccion_factor_defectivo",
+                    "inspeccion_peso_distancia",
                     "inspeccion_cooldown_fallo_s",
                     "defecto_prob_ortogonal",
                     "defecto_prob_diagonal",

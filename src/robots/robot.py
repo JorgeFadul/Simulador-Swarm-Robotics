@@ -154,6 +154,7 @@ class Robot:
         self.goal_mode = True
         self.goal_alcanzado = False
         self._goal_timer = 0.0
+        self._aprox_insp_timer = 0.0
         self.timed_out = False
         self._ult_pos = (self.x, self.y)
         self._sin_avance = 0.0
@@ -235,6 +236,7 @@ class Robot:
         self.goal_mode = False
         self.goal_alcanzado = False
         self._goal_timer = 0.0
+        self._aprox_insp_timer = 0.0
         self.timed_out = False
         self.ruta = []
         self.inspeccionando = False
@@ -264,45 +266,104 @@ class Robot:
         return self.energia.consumir_energia_inspeccion()
 
     def inspeccionar_actual(self, mundo):
-        """Inspecciona la celda libre sobre la que esta el robot y registra el
-        resultado binario (sana/defectuosa) en el mundo y en este robot.
+        """Inspecciona la celda libre objetivo y registra el resultado binario
+        (sana/defectuosa) en el mundo y en este robot.
+
+        Usa la celda registrada al iniciar la pausa (`celda_probando`): el
+        robot se posiciono en el centro exacto de esa celda, por lo que la
+        percusion se aplica sobre el centro y nunca cae en una casilla vecina.
+        Si no hay celda registrada (inspeccion al visitar durante la
+        exploracion), usa la celda que el robot esta pisando.
 
         Es el punto de extension de la accion de inspeccion: la decision de
         CUANDO inspeccionar pertenece a cada estrategia. Devuelve True si se
         realizo una inspeccion nueva, False si la celda no era inspeccionable o
         ya estaba inspeccionada.
         """
-        res = mundo.inspeccionar_celda(self.x, self.y)
+        if self.celda_probando is not None:
+            r, c = self.celda_probando
+        else:
+            gs = self.cfg.grid_size
+            c = int(self.x // gs)
+            r = int(self.y // gs)
+        gs = self.cfg.grid_size
+        cx = c * gs + gs / 2
+        cy = r * gs + gs / 2
+        res = mundo.inspeccionar_celda(cx, cy)
         if res is None:
             return False
-        gs = self.cfg.grid_size
-        c = int(self.x // gs)
-        r = int(self.y // gs)
         self.inspec_robot[r, c] = 1
         self.resultado_robot[r, c] = res
         self.inspeccionadas_robot += 1
+        self._nuevas_inspec_tick = True
         if res:
             self.defectuosas_robot += 1
+            self._defecto_hallado_tick = True
         self.consumir_energia_inspeccion()
         return True
 
-    def _iniciar_inspeccion(self, mundo):
-        """Inicia la prueba de la celda actual: el robot se detiene durante
-        `inspeccion_pausa_s` segundos sobre la celda antes de registrar el
-        resultado (percusion). Durante la pausa queda marcado `celda_probando`
-        para que el renderer lo resalte en amarillo, y no se le asigna otra meta
-        hasta que termine la prueba.
+
+    def _radio_centrado_inspeccion(self):
+        """Radio (px) alrededor del centro de la celda dentro del cual el robot
+        ya se considera posicionado para la percusion.
+
+        Al quedar dentro se ajusta al centro exacto sin que el salto se note;
+        si esta mas lejos, en vez de teletransportarse al centro el robot
+        sigue aproximandose hasta acercarse.
+        """
+        gs = max(self.cfg.grid_size, 1)
+        return max(2.0, gs * 0.2)
+
+    def _budget_aproximacion_insp(self):
+        """Tiempo (s) maximo que el robot intenta acercarse al centro de la
+        celda antes de la percusion.
+
+        Con la llegada permisiva (a `goal_reached_radius` del centro) el robot
+        suele detenerse a ~11-15 px del medio. Si la celda esta despejada, un
+        breve tramo final lo deja a pocos px y el centrado es un retoque que no
+        se nota. Pero en zonas congestionadas (otros robots aparcados) puede
+        estar fisicamente impedido de acercarse mas: este presupuesto evita que
+        se estanque y fuerza la percusion desde donde quedo, sin saltos.
+        """
+        return max(0.6, self.cfg.inspeccion_pausa_s * 1.0)
+
+    def _iniciar_inspeccion(self, mundo, forzar=False):
+        """Inicia la prueba de la celda objetivo: el robot se detiene durante
+        `inspeccion_pausa_s` segundos antes de registrar el resultado
+        (percusion). Durante la pausa queda marcado `celda_probando` para que
+        el renderer lo resalte en amarillo, y no se le asigna otra meta hasta
+        que termine la prueba.
+
+        La celda a probar es la de la meta asignada cuando el robot llego a un
+        objetivo dirigido; si no hay meta (Random Walk) se usa la celda sobre
+        la que quedo el robot. Calcular la celda desde la meta evita registrar
+        la casilla anterior o posterior si el robot aterriza cerca del borde.
+
+        En objetivos dirigidos la percusion solo arranca si el robot ya quedo
+        cerca del centro (a menos de `_radio_centrado_inspeccion`); si aun esta
+        apartado devuelve False y el conductor sigue con el tramo final de
+        aproximacion hacia el medio. Ese tramo esta acotado por
+        `_budget_aproximacion_insp`: al agotarse el presupuesto (celda
+        congestionada, otros robots aparcados) se llama con `forzar=True` y la
+        percusion se hace desde donde quedo el robot, sin saltos. Al quedar
+        dentro del radio se ajusta al centro exacto: un retoque pequeno, no un
+        salto visible.
 
         La celda solo se prueba SI no ha sido inspeccionada segun el modo:
         - colectivo (default): si `mundo.inspec[r,c] == 0`
         - individual: si `self.inspec_robot[r,c] == 0`
 
         Retorna True si se inicio la inspeccion, False si la celda ya estaba
-        inspeccionada (el robot debe elegir otro rumbo).
+        inspeccionada o, sin `forzar`, el robot aun no esta sobre su centro
+        (debe seguir acercandose o elegir otro rumbo).
         """
         gs = self.cfg.grid_size
-        r = int(self.y // gs)
-        c = int(self.x // gs)
+        if self.goal_mode and self.goal is not None:
+            c = int(round((self.goal[0] - gs / 2) / gs))
+            r = int(round((self.goal[1] - gs / 2) / gs))
+        else:
+            c = int(round((self.x - gs / 2) / gs))
+            r = int(round((self.y - gs / 2) / gs))
         if r < 0 or r >= mundo.rows or c < 0 or c >= mundo.cols:
             return False
         if mundo.grid[r, c] == 1:
@@ -314,6 +375,21 @@ class Robot:
             ya_inspeccionada = mundo.inspec[r, c]
         if ya_inspeccionada:
             return False
+        cx = c * gs + gs / 2
+        cy = r * gs + gs / 2
+        # Con meta dirigida, la percusion espera a que el robot este sobre el
+        # centro: si aun esta apartado no arranca y el conductor sigue el tramo
+        # final de aproximacion. `forzar=True` salta esta condicion cuando el
+        # presupuesto de aproximacion se agoto (celda congestionada).
+        if self.goal_mode and self.goal is not None and not forzar:
+            if math.hypot(cx - self.x, cy - self.y) > self._radio_centrado_inspeccion():
+                return False
+        # Ajuste fino al centro exacto solo cuando el robot ya esta cerca;
+        # si quedo mas apartado prueba la celda desde donde se detuvo, sin
+        # desplazamientos bruscos.
+        if math.hypot(cx - self.x, cy - self.y) <= self._radio_centrado_inspeccion():
+            self.x = cx
+            self.y = cy
         self.inspeccionando = True
         self.inspeccionando_timer = self.cfg.inspeccion_pausa_s
         self.celda_probando = (r, c)
@@ -666,26 +742,43 @@ class Robot:
         self.zigzag["objetivo_celda"] = None
         return True
 
+    def _mezclar_rumbo_repulsion(self, rumbo, rep_x, rep_y, colision_inminente,
+                                 has_obs):
+        """Mezcla el rumbo hacia el objetivo con el vector de repulsion.
+
+        La repulsion SOLO desvia el rumbo si el obstaculo esta realmente
+        adelante (producto punto negativo rumbo·repulsion). Con dot >= 0 el
+        obstaculo esta a un lado o detras (paso junto a una pared, pasillo),
+        y el rumbo NO se toca: el despeje lateral lo resuelven la fisica
+        (`colision_frontal` frena) y el pivote de esquina, no el heading.
+
+        Dot fuertemente negativo (frente bloqueado) usa evasion fuerte; dot
+        levemente negativo (esquina que se avecina) usa evasion suave. Con
+        colision inminente se mantiene la rama de emergencia: repulsion pura
+        si el obstaculo esta adelante, sino el peso de emergencia."""
+        if not has_obs:
+            return rumbo
+        gdx, gdy = math.cos(rumbo), math.sin(rumbo)
+        dot = gdx * rep_x + gdy * rep_y
+        if colision_inminente:
+            w = 0.0 if dot < 0.0 else self.cfg.dirigido_peso_evasion_imminente
+        elif dot < self.cfg.dirigido_gate_fuerte_dot:
+            w = self.cfg.dirigido_peso_evasion_fuerte
+        elif dot < self.cfg.dirigido_gate_suave_dot:
+            w = self.cfg.dirigido_peso_evasion_suave
+        else:
+            w = 1.0
+        return math.atan2(w * gdy + (1.0 - w) * rep_y,
+                          w * gdx + (1.0 - w) * rep_x)
+
     def _avanzar_recto(self, rumbo, dt, mundo, rep_dx, rep_dy, has_obs,
                        colision_inminente):
         """Conduce en linea recta hacia el rumbo cardinal con evitacion
         reactiva. La pared frontal desconocida la detiene la fisica del
         update (choque -> descubrir_pared_frontal)."""
-        destino = rumbo
-        if has_obs:
-            gdx, gdy = math.cos(rumbo), math.sin(rumbo)
-            dot = gdx * rep_dx + gdy * rep_dy
-            if colision_inminente:
-                w = 0.0 if dot < 0.0 else self.cfg.dirigido_peso_evasion_imminente
-            elif dot < -0.15:
-                w = self.cfg.dirigido_peso_evasion_fuerte
-            elif dot < 0.3:
-                w = self.cfg.dirigido_peso_evasion_suave
-            else:
-                w = 1.0
-            destino = math.atan2(w * gdy + (1.0 - w) * rep_dy,
-                                 w * gdx + (1.0 - w) * rep_dx)
-        elif colision_inminente:
+        destino = self._mezclar_rumbo_repulsion(
+            rumbo, rep_dx, rep_dy, colision_inminente, has_obs)
+        if not has_obs and colision_inminente:
             destino = self.angle + math.radians(45)
 
         diff = self._diferencia_angular(destino, self.angle)
@@ -774,6 +867,32 @@ class Robot:
                 zz["modo"] = "perdido"
                 self._intentar_rescate(mundo)
 
+    def _radio_evasion_activa(self):
+        """Radio (px) de la repulsion que se mezcla con el rumbo dirigido.
+
+        Mucho mas corto que el sensor (`detection_radius`, ~50 px): las paredes
+        y robots lejanos no tiran del heading (eso hacia que el robot perdiera
+        la direccion al objetivo en pasillos anchos y orbitara deslizandose
+        en paralelo a la pared). Con 2 radios de cobertura hay tiempo de
+        reaccion para el obstaculo mas proximo.
+        """
+        return max(2.0 * self.radius, 2.0 * self.cfg.goal_reached_radius_px)
+
+    def _lookahead_colision(self):
+        """Alcance (px) del chequeo de colision frontal.
+
+        Normalmente `detection_radius` (50 px), pero se acorta en la
+        aproximacion final: cerca del objetivo no debe mirarse mas alla de la
+        meta, porque un obstaculo que queda DETRAS de la celda objetivo (p. ej.
+        la pared que bordea una celda de fin de pasillo) dispara una colision
+        inminente falsa a 50 px y el robot pivota en sitio sin poder cerrar la
+        percusion. El frenado fisico por paso (colision_frontal del movimiento)
+        sigue deteniendo cualquier choque real durante el tramo corto final."""
+        if self.goal_mode and self.goal is not None and not self.goal_alcanzado:
+            dg = math.hypot(self.goal[0] - self.x, self.goal[1] - self.y)
+            return min(self.detection_radius, dg)
+        return self.detection_radius
+
     def _dirigir_hacia_objetivo(self, dt, mundo, rep_dx, rep_dy, has_obs, colision_inminente):
         """Movimiento dirigido continuo (tipo diferencial).
 
@@ -797,57 +916,164 @@ class Robot:
         dist = math.hypot(tx - self.x, ty - self.y)
         if dist <= self.goal_reached_radius:
             self.ruta.pop(0)
-            if not self.ruta:
-                # En la etapa de Inspeccion (2E), al llegar al objetivo el robot
-                # se detiene un segundo "probando" la celda (percusion) antes de
-                # registrar el resultado. Fuera de la etapa de Inspeccion, la
-                # meta dirigida se da por alcanzada al llegar.
-                if mundo.etapa == "inspeccion" or self.cfg.modo_fase == "hibrido":
-                    self._iniciar_inspeccion(mundo)
-                else:
-                    self.goal_alcanzado = True
-                    self._esperar_objetivo()
+
+        if (mundo.etapa == "inspeccion" or self.cfg.modo_fase == "hibrido") \
+                and math.hypot(gx - self.x, gy - self.y) <= self.goal_reached_radius:
+            # Llegada permisiva (dentro del radio de llegada de la celda meta):
+            # tramo final dirigido al CENTRO de la celda con presupuesto de
+            # aproximacion. El presupuesto se acumula AUNQUE otros robots
+            # empujen al robot y re-planifiquen ruta: antes ese timer solo
+            # corria con la ruta vacia y los choques la repoblaban en bucle,
+            # de modo que el robot orbitaba alrededor de la celda (12-43 px)
+            # sin poder cerrar la percusion.
+            self._aprox_insp_timer += dt
+            if self._aprox_insp_timer >= self._budget_aproximacion_insp():
+                self._iniciar_inspeccion(mundo, forzar=True)
                 return
+            tx, ty = gx, gy
+        elif not self.ruta:
+            # En la etapa de Inspeccion (2E), al llegar al objetivo el robot
+            # hace una ultima aproximacion hacia el centro de la celda y se
+            # detiene un segundo "probando" (percusion) antes de registrar
+            # el resultado. La celda probada es la de la meta (no la del
+            # punto de llegada). Si no logra acercarse dentro del
+            # presupuesto `_budget_aproximacion_insp` (celda congestionada
+            # por otros robots), fuerza la percusion desde donde quedo sin
+            # saltos.
+            if mundo.etapa == "inspeccion" or self.cfg.modo_fase == "hibrido":
+                if math.hypot(gx - self.x, gy - self.y) <= self._radio_centrado_inspeccion():
+                    self._iniciar_inspeccion(mundo)
+                    return
+                self._aprox_insp_timer += dt
+                if self._aprox_insp_timer >= self._budget_aproximacion_insp():
+                    self._iniciar_inspeccion(mundo, forzar=True)
+                    return
+                tx, ty = gx, gy
+            else:
+                self.goal_alcanzado = True
+                self._esperar_objetivo()
+                return
+        else:
             tx, ty = self.ruta[0]
 
         destino = math.atan2(ty - self.y, tx - self.x)
 
-        if colision_inminente and not has_obs:
-            destino = self.angle + math.radians(45)
-        elif has_obs:
+        # Repulsion de corto alcance para el rumbo. El sensor largo (50 px)
+        # tira del heading con paredes lejanas: en pasillos anchos anula la
+        # direccion al objetivo y el robot se desliza en paralelo a la pared
+        # (orbitando sin avanzar). Aqui solo se mezcla la repulsion con
+        # obstaculos REALMENTE cercanos; la colision frontal la maneja la rama
+        # de evasion o el pivote, no el heading.
+        rep_cx, rep_cy, has_obs_c = mundo.detectar_en_rango(
+            self.x, self.y, self._radio_evasion_activa()
+        )
+
+        if colision_inminente and not has_obs_c:
+            # Evasion consciente del objetivo (frente bloqueado y sin vector de
+            # repulsion util): se toma un rumbo de evasion FIJO en el mundo, 45
+            # grados hacia el flanco que acorta el angulo hacia la meta (derecha
+            # si ya esta alineado). Mientras el frente siga bloqueado se
+            # mantiene ese rumbo, y si ya se llego y aun sigue bloqueado se
+            # barre otro paso en el mismo sentido. Asi el robot desliza a lo
+            # largo del obstaculo hacia el objetivo sin perseguir una esquina
+            # (evita el giro infinito del +45 relativo re-evaluado cada frame).
+            paso_ev = math.radians(45.0)
+            umbral_ev = math.radians(self.cfg.dirigido_umbral_giro_deg)
+            diff_meta = self._diferencia_angular(destino, self.angle)
+            lado = math.copysign(1.0, diff_meta) if abs(diff_meta) > 1e-6 else 1.0
+            rumbo = getattr(self, "_evadir_rumbo", None)
+            if rumbo is None:
+                rumbo = self.angle + lado * paso_ev
+            elif abs(self._diferencia_angular(rumbo, self.angle)) <= umbral_ev:
+                rumbo = self.angle + lado * paso_ev
+            self._evadir_rumbo = rumbo
+            destino = rumbo
+        elif has_obs_c:
             # La repulsion solo desvia el rumbo si el obstaculo esta adelante
             # (producto punto negativo con la direccion al destino). Si esta
-            # a un lado o detras, se mantiene el rumbo al objetivo.
-            gdx, gdy = math.cos(destino), math.sin(destino)
-            dot = gdx * rep_dx + gdy * rep_dy
-            if colision_inminente:
-                w = 0.0 if dot < 0.0 else self.cfg.dirigido_peso_evasion_imminente
-            elif dot < -0.15:
-                w = self.cfg.dirigido_peso_evasion_fuerte
-            elif dot < 0.3:
-                w = self.cfg.dirigido_peso_evasion_suave
-            else:
-                w = 1.0
-            destino = math.atan2(w * gdy + (1.0 - w) * rep_dy,
-                                 w * gdx + (1.0 - w) * rep_dx)
+            # a un lado o detras, se mantiene el rumbo al objetivo: asi el
+            # robot puede correr junto a paredes sin que lo empujen.
+            destino = self._mezclar_rumbo_repulsion(
+                destino, rep_cx, rep_cy, colision_inminente, True)
+        else:
+            self._evadir_rumbo = None
 
         diff = self._diferencia_angular(destino, self.angle)
         umbral = math.radians(self.cfg.dirigido_umbral_giro_deg)
+        pivote_umbral = math.radians(self.cfg.dirigido_pivote_umbral_deg)
+        kp = self.cfg.dirigido_giro_kp
+        radio_cerrado = max(self.radius, 1e-3)
+
+        # Frenado por distancia al objetivo (no al waypoint en curso): evita la
+        # orbita alrededor del punto, porque cerca del destino la velocidad baja
+        # y el radio de giro queda dentro de la tolerancia de llegada.
+        dg = math.hypot(gx - self.x, gy - self.y)
+        freno = min(1.0, dg / max(2.0 * self.goal_reached_radius, 1e-3))
+
+        # Giro de esquina en el sitio: si el siguiente tramo de la ruta exige
+        # girar fuerte y el robot ya esta practicamente sobre el waypoint (o ya
+        # lo estaba pivoteando), pivota en su centro (v=0) hasta alinear. Así el
+        # arco de giro en marcha no se abre sobre la esquina: sin esto el robot
+        # cortaba las esquinas, chocaba con la pared y entraba en la reactivacion
+        # infinita (colision -> jitter -> re-ruta -> misma esquina) que se ve en
+        # pantalla como orbitar alrededor del punto.
+        esperando = getattr(self, "_esperando_esquina", False)
+        if esperando and abs(diff) <= pivote_umbral:
+            esperando = False
+        giro_esquina = (not colision_inminente and self.ruta
+                        and abs(diff) > pivote_umbral
+                        and (esperando or dist <= self.goal_reached_radius))
+        self._esperando_esquina = esperando
+        if giro_esquina:
+            self._esperando_esquina = True
+            self.omega = math.copysign(min(self.turn_speed, kp * abs(diff)), diff)
+            self.angle += self.omega * dt
+            self.angle = math.atan2(math.sin(self.angle), math.cos(self.angle))
+            self.speed = 0.0
+            self.target_speed = 0.0
+            self.vx = 0.0
+            self.vy = 0.0
+            self.state = self.ROTATING
+            self.target_angle = self.angle
+            return
+
+        if colision_inminente and abs(diff) > pivote_umbral:
+            # El arco cerrado no es accesible (obstruccion frontal y se necesita
+            # un giro grande): se pivota en el centro, giro en 360° sobre una
+            # rueda quieta, sin avance (v=0), como un robot diferencial real.
+            self.omega = math.copysign(self.turn_speed, diff)
+            self.angle += self.omega * dt
+            self.angle = math.atan2(math.sin(self.angle), math.cos(self.angle))
+            self.speed = 0.0
+            self.target_speed = 0.0
+            self.vx = 0.0
+            self.vy = 0.0
+            self.state = self.ROTATING
+            self.target_angle = self.angle
+            return
+
         if abs(diff) <= umbral:
             self.omega = 0.0
             self.angle = destino
         else:
-            self.omega = math.copysign(self.turn_speed, diff)
+            # Arco cerrado (una rueda quieta): el giro es proporcional (no
+            # bang-bang) y la velocidad de avance se limita a `omega*R` para que
+            # el radio de giro nunca sea mas abierto que el radio real del robot
+            # v/omega >= R. Si la ganancia pide girar mas rapido de lo que el
+            # arco permite a esa velocidad, la velocidad baja y el giro se va
+            # cerrando (transicion suave hacia el pivotaje).
+            omega_deseada = min(self.turn_speed, kp * abs(diff))
+            self.omega = math.copysign(omega_deseada, diff)
+            alineado = max(0.0, math.cos(diff))
+            v_avance = self.max_speed * freno * (self.cfg.dirigido_avance_min
+                                                 + (1.0 - self.cfg.dirigido_avance_min) * alineado)
+            self.speed = min(v_avance, omega_deseada * radio_cerrado)
             self.angle += self.omega * dt
             self.angle = math.atan2(math.sin(self.angle), math.cos(self.angle))
 
-        # Velocidad lineal escalada por el alineamiento con el destino: gira
-        # (pivotando si hace falta) mientras avanza, sin parar por completo.
-        # El factor minimo de avance (dirigido_avance_min) marca cuanto se
-        # avanza mientras se esta girando para alinearse.
         alineado = max(0.0, math.cos(self._diferencia_angular(destino, self.angle)))
-        self.speed = self.max_speed * (self.cfg.dirigido_avance_min
-                                       + (1.0 - self.cfg.dirigido_avance_min) * alineado)
+        self.speed = self.max_speed * freno * (self.cfg.dirigido_avance_min
+                                               + (1.0 - self.cfg.dirigido_avance_min) * alineado)
         self.target_speed = self.speed
         self.target_angle = destino
         self.state = self.MOVING
@@ -861,8 +1087,8 @@ class Robot:
 
         colision_inminente = mundo.colision_frontal(
             self.x, self.y,
-            math.cos(self.angle) * self.detection_radius,
-            math.sin(self.angle) * self.detection_radius,
+            math.cos(self.angle) * self._lookahead_colision(),
+            math.sin(self.angle) * self._lookahead_colision(),
             self.radius, mundo.robots,
             solo_descubiertas=True
         )

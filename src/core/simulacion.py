@@ -1,7 +1,7 @@
 import pygame
 import numpy as np
 
-from .config import Config, ESTRATEGIAS_EXPLORACION, ESTRATEGIAS_INSPECCION
+from .config import Config, ESTRATEGIAS_EXPLORACION, ESTRATEGIAS_INSPECCION, MAX_GEN_VISIBLE
 from .mundo import Mundo
 from ..robots.robot import Robot
 from ..gui.renderer import Renderer
@@ -46,12 +46,15 @@ class Simulacion:
         self.ver_defectos = False
         self.ver_voronoi = True
         self.ver_triangulacion = False
+        # Visibilidad por generacion de triangulacion (1..MAX_GEN_VISIBLE)
+        self.ver_generaciones = {g: True for g in range(1, MAX_GEN_VISIBLE + 1)}
         # Estado de fase
         self.etapa = "exploracion"
         self._total_descubierto_previo = 0
         self._ultimo_nuevo_descubrimiento = 0.0
         self._total_inspeccionadas_previo = 0
         self._ultimo_nuevo_inspeccionado = 0.0
+        self._fin_reportado = False
 
     @property
     def transicionado(self):
@@ -78,6 +81,7 @@ class Simulacion:
         self._ultimo_nuevo_descubrimiento = 0.0
         self._total_inspeccionadas_previo = 0
         self._ultimo_nuevo_inspeccionado = 0.0
+        self._fin_reportado = False
 
     def _crear_planner(self):
         """Crea el planner segun el modo de simulacion y la estrategia activa.
@@ -102,9 +106,16 @@ class Simulacion:
                 except Exception as e:
                     print(f"[RL Exploracion V3] No se pudo cargar el modelo: {e}")
                     return None
+            if strat == "Cerebro Mosca (Dopamina)":
+                from ..bio.fly_controller import FlyBrainSwarmController
+                return FlyBrainSwarmController(self.cfg, rng=self.rng)
             return None
 
-        # Modo hibrido: RL Hibrido usa un controlador RL como planner
+        # Modo hibrido: Cerebro Mosca o RL como planner
+        if self.cfg.estrategia_hibrido == "Cerebro Mosca (Dopamina)":
+            from ..bio.fly_controller import FlyBrainSwarmController
+            return FlyBrainSwarmController(self.cfg, rng=self.rng)
+
         if self.cfg.estrategia_hibrido == "RL Hibrido V3":
             try:
                 from ..rl.controller import RLControllerV3DES
@@ -113,6 +124,7 @@ class Simulacion:
             except Exception as e:
                 print(f"[RL Hibrido V3] No se pudo cargar el modelo: {e}")
                 return None
+
 
         if self.cfg.estrategia_hibrido in ("RL Hibrido", "RL Hibrido V2"):
             # El controlador usa la geometria del mundo actual.
@@ -179,6 +191,7 @@ class Simulacion:
         self._ultimo_nuevo_descubrimiento = 0.0
         self._total_inspeccionadas_previo = 0
         self._ultimo_nuevo_inspeccionado = 0.0
+        self._fin_reportado = False
         self.planner_inspeccion = None
 
         for r in self.mundo.robots:
@@ -231,9 +244,21 @@ class Simulacion:
         # Fronteras agotadas
         return int(_celdas_frontera(mundo).sum()) == 0
 
+    def _puntos_voronoi_agotados(self):
+        """Verdadero (estrategia Voronoi) cuando no quedan puntos de interes
+        por inspeccionar: ni pendientes ni en curso de ningun robot."""
+        p = self.planner_inspeccion
+        if not isinstance(p, InspeccionVoronoi):
+            return False
+        try:
+            return p.puntos_restantes(self.mundo) <= 0
+        except Exception:
+            return False
+
     def _termino_inspeccion(self, mundo):
-        """Fase de inspeccion: termina por inspeccion completa o estancamiento."""
-        if mundo.inspeccion_completa():
+        """Fase de inspeccion: termina por inspeccion completa, por agotar los
+        puntos de interes (Voronoi) o por estancamiento."""
+        if mundo.inspeccion_completa() or self._puntos_voronoi_agotados():
             return True
         if (self.tiempo_simulado - self._ultimo_nuevo_inspeccionado > 30):
             return True
@@ -258,7 +283,9 @@ class Simulacion:
                     exploracion_ok = True
         inspeccion_ok = mundo.inspeccion_completa()
         if not inspeccion_ok and self.etapa == "inspeccion":
-            if (self.tiempo_simulado - self._ultimo_nuevo_inspeccionado > 30):
+            if self._puntos_voronoi_agotados():
+                inspeccion_ok = True
+            elif (self.tiempo_simulado - self._ultimo_nuevo_inspeccionado > 30):
                 inspeccion_ok = True
         return exploracion_ok and inspeccion_ok
 
@@ -276,9 +303,27 @@ class Simulacion:
                     exploracion_ok = True
         inspeccion_ok = mundo.inspeccion_completa()
         if not inspeccion_ok:
-            if (self.tiempo_simulado - self._ultimo_nuevo_inspeccionado > 30):
+            if self._puntos_voronoi_agotados():
+                inspeccion_ok = True
+            elif (self.tiempo_simulado - self._ultimo_nuevo_inspeccionado > 30):
                 inspeccion_ok = True
         return exploracion_ok and inspeccion_ok
+
+    def _reportar_fin_inspeccion(self):
+        """Al terminar la etapa de inspeccion Voronoi imprime el porcentaje de
+        celdas inspeccionadas y las defectuosas encontradas. Solo una vez."""
+        if self._fin_reportado or self.cfg.estrategia_inspeccion != "Voronoi":
+            return
+        self._fin_reportado = True
+        m = self.mundo
+        libres = m.total_libres if m is not None else 0
+        inspeccionadas = m._inspeccionadas if m is not None else 0
+        defectuosas = m._defectuosas if m is not None else 0
+        pct_celdas = 100.0 * inspeccionadas / libres if libres else 0.0
+        pct_def = 100.0 * defectuosas / inspeccionadas if inspeccionadas else 0.0
+        print(f"[Inspeccion Voronoi] Fin de etapa a t={self.tiempo_final:.1f}s -> "
+              f"celdas inspeccionadas: {inspeccionadas}/{libres} ({pct_celdas:.2f}%); "
+              f"defectuosas encontradas: {defectuosas} ({pct_def:.2f}% del muestreo).")
 
     def _verificar_transicion(self, mundo):
         """Verifica transicion de exploracion a inspeccion (modo dos_etapas)."""
@@ -324,6 +369,7 @@ class Simulacion:
         if self._termino(m):
             self.estado = "completado"
             self.tiempo_final = self.tiempo_simulado
+            self._reportar_fin_inspeccion()
             return
 
         modo = self.cfg.modo_fase
@@ -462,7 +508,8 @@ class Simulacion:
                            ver_intencion=self.ver_intencion,
                            ver_defectos=self.ver_defectos,
                            ver_voronoi=self.ver_voronoi,
-                           ver_triangulacion=self.ver_triangulacion)
+                           ver_triangulacion=self.ver_triangulacion,
+                           ver_generaciones=self.ver_generaciones)
         self._draw_mode_hud()
         self._actualizar_titulo()
         pygame.display.flip()

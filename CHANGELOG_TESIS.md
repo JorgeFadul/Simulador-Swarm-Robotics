@@ -1206,6 +1206,20 @@ Esta sección documenta los desarrollos correspondientes a la Fase 4 de la tesis
   - Penalización por consumo de energía de locomoción.
   - Script de entrenamiento: `train_rl_v3_exp.py`.
 
+### 1.7 Estrategia Bioinspirada: Cerebro de Mosca (*Drosophila melanogaster*) con Dopamina
+- **Arquitectura Neuromórfica en Enjambre**:
+  - Cada robot porta una instancia individualizada de `FlyBrain` (`src/bio/fly_brain.py`) que combina dos subsistemas neurobiológicos:
+    - **Mushroom Body (MB)**: Proyección de alta dimensión esparsa (*Kenyon Cells*, $k$-Winner-Take-All al $5\%$) y plasticidad sináptica en caliente gobernada por la regla biológica de tres factores (*Three-Factor Learning Rule*):
+      $$\Delta W_{ij} = \eta \cdot \text{KC}_i \cdot \text{MBON}_j \cdot \text{Dopamina}(t) - \lambda W_{ij}$$
+    - **Central Complex (CX)**: Atractor en anillo (*Ring Attractor*) para integración de rumbo y orientación espacial fluida.
+- **Canal Sensorial Social para Enjambres ($\approx 10$ Robots)**:
+  - Integra la percepción de densidad social ($N_{\text{cerca}}$) y vectores de las compañeras más próximas, permitiendo al enjambre autorregularse: evitar hacinamiento o converger ordenadamente ante una alerta.
+- **Modulación Dopaminérgica en Tiempo Real**:
+  - Inyección instantánea de pulsos de dopamina: $+1.5$ por baldosas libres descubiertas, $+6.0$ ráfaga por baldosas defectuosas, penalización por inmovilidad/estancamiento y consumo energético.
+- **Telemetría en Vivo**:
+  - Visualización en la pestaña "Individual" de la GUI del nivel instantáneo de dopamina de cada robot.
+
+
 
 ## 2. Archivos creados y modificados
 
