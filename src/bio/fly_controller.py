@@ -212,8 +212,14 @@ class FlyBrainSwarmController:
                 robot._nuevas_inspec_tick = False
 
             if hasattr(robot, "_defecto_hallado_tick") and robot._defecto_hallado_tick:
-                # Racha de defectos consecutivos: multiplica por 2^racha
-                racha = self._racha_defectos.get(rid, 0)
+                # Racha: si el último defecto fue hace <10s, la racha sigue
+                tiempo_desde_ult = self._pasos_sin_defecto.get(rid, 999.0)
+                if tiempo_desde_ult <= 10.0:
+                    # Dentro de la ventana → racha continúa
+                    racha = self._racha_defectos.get(rid, 0)
+                else:
+                    # Fuera de ventana → racha nueva
+                    racha = 0
                 multiplicador = 2.0 ** racha
                 dopamina += 6.0 * multiplicador
                 self._racha_defectos[rid] = racha + 1
@@ -221,8 +227,9 @@ class FlyBrainSwarmController:
                 self._pasos_sin_defecto[rid] = 0.0
                 robot._defecto_hallado_tick = False
             else:
-                # No encontró defecto este tick → resetear racha
-                self._racha_defectos[rid] = 0
+                # Solo resetear racha si pasaron más de 10s sin defecto
+                if self._pasos_sin_defecto.get(rid, 0.0) > 10.0:
+                    self._racha_defectos[rid] = 0
 
             # Penalización proporcional al tiempo sin encontrar defecto nuevo
             t_sin = self._pasos_sin_defecto[rid]
