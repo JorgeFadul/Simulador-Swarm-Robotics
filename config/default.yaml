@@ -4,6 +4,10 @@ map_height: 1000
 fps: 60
 num_robots: 10
 
+# Multiplicador del radio del robot para contar vecinos dentro de ese radio:
+# radio_vecindad = rl_vecindad_radio_mult * robot_radius_px (default: 3.5cm * 5 = 17.5cm).
+rl_vecindad_radio_mult: 5.0
+
 pixels_per_cm: 5
 
 robot_radius_cm: 3.5
@@ -54,7 +58,22 @@ dirigido_avance_min: 0.45
 dirigido_peso_evasion_imminente: 0.5
 dirigido_peso_evasion_fuerte: 0.4
 dirigido_peso_evasion_suave: 0.8
+# Puertas de la repulsion sobre el rumbo: la repulsion SOLO desvia el rumbo si
+# el obstaculo esta realmente adelante (dot < 0). Por eso la puerta suave es 0.0:
+# con dot >= 0 (pared a un lado o detras, p. ej. al pasar junto a una pared o en
+# un pasillo) el rumbo hacia el objetivo NO se toca; el despeje lateral lo
+# resuelven `colision_frontal` (frenado), el pivote de esquina y el push-out.
+# `dirigido_gate_fuerte_dot` separa los obstaculos claramente frontales (repulsion
+# fuerte) de los levemente adelante / esquinas (repulsion suave).
+dirigido_gate_fuerte_dot: -0.5
+dirigido_gate_suave_dot: 0.0
 dirigido_umbral_giro_deg: 5.0
+# Giro cerrado (una rueda quieta): radio nunca menor que el radio real del
+# robot. `dirigido_giro_kp` da la correccion proporcional de rumbo y
+# `dirigido_pivote_umbral_deg` el giro grande a partir del cual, si el arco
+# no es accesible por obstaculos frontales, se pivota en el centro (v=0).
+dirigido_giro_kp: 6.0
+dirigido_pivote_umbral_deg: 35.0
 
 # --- Modelo de energia (bateria) ---
 masa_kg: 0.35
@@ -73,13 +92,17 @@ inspeccion_pausa_s: 1.0
 auction_defectivo_factor: 0.15
 auction_sano_factor: 0.25
 auction_profundidad_p: 0.97
-# Nueva semantica: barrera por generacion y region raiz, peso por generacion,
-# ajuste dinamico y cola de tareas fallidas. `inspeccion_padre_antes_hijo`
-# queda obsoleto (se conserva por compatibilidad de YAMLs).
+# Gate de elegibilidad en la subasta de inspeccion (tarea_elegible):
+# true = orden estricto padre->hijo (un hijo se subasta solo al estar
+# inspeccionado su padre directo); false = sin gate, toda tarea pendiente
+# es subastable independientemente de su nivel.
 inspeccion_padre_antes_hijo: true
 inspeccion_peso_generacion: 1.5
-inspeccion_factor_sano: 1.5
-inspeccion_factor_defectivo: 0.6
+# Exponente alpha de la distancia en el interes (mas relevancia a la distancia
+# conforme alpha crece): interes = R / ((nivel+1) * distancia^alpha).
+inspeccion_peso_distancia: 1.0
+inspeccion_factor_sano: 0.6
+inspeccion_factor_defectivo: 2.0
 # Tareas fallidas: aparcar una tarea tras N timeouts y no volverla a ofrecer
 # durante `cooldown` segundos, para no bloquear la generacion activa de su
 # region raiz con objetivos fisicamente inalcanzables.
@@ -119,6 +142,15 @@ headless_max_pasos: 60000
 walls:
   - {x: 330, y: 500, width: 20, height: 600, angle: 0}
   - {x: 670, y: 500, width: 20, height: 600, angle: 0}
+
+# --- Cerebro de Mosca (Dopamina): configuracion de entrenamiento y despliegue ---
+# `kc` debe coincidir con las Kenyon Cells usadas al entrenar (shape de los
+# pesos guardados); la GUI carga `weights_path` con esa arquitectura.
+fly:
+  kc: 1000
+  weights_path: models/bio/fly_swarm_latest.npz
+  mutacion: 0.0
+  patch_size: 15
 
 # --- RL Training ---
 rl:

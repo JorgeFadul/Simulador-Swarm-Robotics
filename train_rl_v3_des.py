@@ -2,14 +2,14 @@
 
 Entrena una politica PPO descentralizada que funciona con cualquier numero de
 robots N y cualquier tamaño de mapa R x C. Usa observacion egocentrica local,
-radio de alerta por defectos y penalización por inactividad.
+radio de alerta por defectos, penalizacion por inactividad y un contador de
+robots vecinos dentro de un radio de vecindad (rl_vecindad_radio_mult * radio).
 
 Uso:
-    python train_rl_v3_des.py --timesteps 500000 --num-robots 10 --patch-size 15
+    python train_rl_v3_des.py --timesteps 5000000 --num-robots 10 --patch-size 15
 """
 
 import argparse
-import multiprocessing
 import os
 import sys
 
@@ -17,17 +17,27 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback
-from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
+from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.monitor import Monitor
 from src.core.config import Config
 from src.rl.env import SwarmEnvDescentralizado
+
+
+def _make_env(cfg, seed, patch_size, radio_alerta):
+    """Fabrica de entorno a nivel de modulo (pickleable para spawn en Windows)."""
+    def _init():
+        return SwarmEnvDescentralizado(
+            cfg=cfg, seed=seed, patch_size=patch_size,
+            radio_alerta_px=radio_alerta, auto_assign=True, headless=True)
+    return _init
 
 
 def main():
     parser = argparse.ArgumentParser(description="Entrenador RL V3-DES Descentralizado")
     parser.add_argument("--timesteps", type=int, default=300000, help="Pasos de entrenamiento total")
     parser.add_argument("--num-robots", type=int, default=10, help="Numero de robots para la simulacion de entrenamiento")
-    parser.add_argument("--patch-size", type=int, default=15, help="Tamaño de la ventana local KxK")
-    parser.add_argument("--radio-alerta", type=float, default=500.0, help="Radio de señal de alerta por celdas defectuosas (px)")
+    parser.add_argument("--patch-size", type=int, default=15, help="Tamano de la ventana local KxK")
+    parser.add_argument("--radio-alerta", type=float, default=500.0, help="Radio de senal de alerta por celdas defectuosas (px)")
     parser.add_argument("--out", type=str, default="models/v3_des", help="Directorio de salida")
     parser.add_argument("--n-envs", type=int, default=0,
                         help="Numero de entornos paralelos (0 = auto: nucleos CPU)")
@@ -40,30 +50,23 @@ def main():
 
     n_envs = args.n_envs
     if n_envs <= 0:
-        n_envs = max(1, multiprocessing.cpu_count())
-    print(f" ========== Envs paralelos: {n_envs} ==========")
+        n_envs = max(1, os.cpu_count() or multiprocessing_count())
+    print(f" ========== Envs paralelos (SubprocVecEnv): {n_envs} ==========", flush=True)
 
-    def _make_env(seed):
-        def _init():
-            return SwarmEnvDescentralizado(
-                cfg=cfg,
-                seed=seed,
-                patch_size=args.patch_size,
-                radio_alerta_px=args.radio_alerta,
-                auto_assign=True,
-                headless=True
-            )
-        return _init
+    env_fns = [_make_env(cfg, 100 + i, args.patch_size, args.radio_alerta)
+               for i in range(n_envs)]
+    env = SubprocVecEnv([lambda e=e: Monitor(e()) for e in env_fns])
 
-    env = DummyVecEnv([_make_env(100 + i) for i in range(n_envs)])
-
-    print(f"=== Iniciando entrenamiento RL V3-DES (Descentralizado e Invariante) ===")
-    print(f" - Espacio de observacion: {env.observation_space.shape}")
-    print(f" - Espacio de accion: {env.action_space}")
-    print(f" - Robots en entrenamiento: {args.num_robots}")
-    print(f" - Patch size: {args.patch_size}x{args.patch_size}")
-    print(f" - Radio de alerta: {args.radio_alerta} px")
-    print(f" - Envs paralelos (SubprocVecEnv): {n_envs}")
+    print(f"=== Iniciando entrenamiento RL V3-DES (Descentralizado e Invariante) ===", flush=True)
+    print(f" - Espacio de observacion: {env.observation_space.shape}", flush=True)
+    print(f" - Espacio de accion: {env.action_space}", flush=True)
+    print(f" - Robots en entrenamiento: {args.num_robots}", flush=True)
+    print(f" - Patch size: {args.patch_size}x{args.patch_size}", flush=True)
+    print(f" - Radio de alerta: {args.radio_alerta} px", flush=True)
+    print(f" - Radio de vecindad (contador de vecinos): "
+          f"{cfg.rl_vecindad_radio_px:.1f} px = "
+          f"{cfg.rl_vecindad_radio_mult}x radio del robot", flush=True)
+    print(f" - Envs paralelos (SubprocVecEnv): {n_envs}", flush=True)
 
     model = PPO(
         "MlpPolicy",
@@ -72,11 +75,13 @@ def main():
         learning_rate=3e-4,
         n_steps=2048,
         batch_size=64,
+        n_epochs=10,
+        device="auto",
         tensorboard_log=None
     )
 
     checkpoint_callback = CheckpointCallback(
-        save_freq=50000,
+        save_freq=100000,
         save_path=os.path.join(args.out, "checkpoints"),
         name_prefix="ppo_v3_des"
     )
@@ -85,7 +90,13 @@ def main():
 
     final_path = os.path.join(args.out, "final_v3_des.zip")
     model.save(final_path)
-    print(f"Modelo final guardado exitosamente en: {final_path}")
+    print(f"Modelo final guardado exitosamente en: {final_path}", flush=True)
+    env.close()
+
+
+def multiprocessing_count():
+    import multiprocessing
+    return multiprocessing.cpu_count()
 
 
 if __name__ == "__main__":

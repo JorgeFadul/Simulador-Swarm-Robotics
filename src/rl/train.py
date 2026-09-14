@@ -234,10 +234,7 @@ def _make_vec(cfg, args, n_envs, seed):
                         map_known=args.map_known,
                         auto_assign=args.auto_assign)
                for i in range(n_envs)]
-    if n_envs == 1:
-        env = DummyVecEnv([lambda: Monitor(env_fns[0]())])
-    else:
-        env = SubprocVecEnv([lambda e=e: Monitor(e()) for e in env_fns])
+    env = DummyVecEnv([lambda e=e: Monitor(e()) for e in env_fns])
     return env
 
 

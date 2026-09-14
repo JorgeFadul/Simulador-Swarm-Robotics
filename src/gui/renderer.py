@@ -16,7 +16,8 @@ class Renderer:
     def draw(self, mundo: Mundo, estado="running", plan=None,
              plan_inspeccion=None,
              ver_fronteras=True, ver_objetivos=True, ver_intencion=True,
-             ver_defectos=False, ver_voronoi=False, ver_triangulacion=False):
+             ver_defectos=False, ver_voronoi=False, ver_triangulacion=False,
+             ver_generaciones=None):
         self.screen.fill((20, 20, 30))
         self._draw_exploracion(mundo, estado)
         if ver_defectos:
@@ -24,7 +25,8 @@ class Renderer:
         if ver_fronteras and plan is not None and getattr(plan, "frontera_mask", None) is not None:
             self._draw_fronteras(mundo, plan.frontera_mask)
         if ver_voronoi:
-            self._draw_capa_voronoi(mundo, plan, plan_inspeccion)
+            self._draw_capa_voronoi(mundo, plan, plan_inspeccion,
+                                    ver_generaciones=ver_generaciones)
         self._draw_grid(mundo)
         self._draw_walls(mundo)
         # Los resultados de inspeccion (probando/sana/defectuosa) se dibujan
@@ -42,7 +44,8 @@ class Renderer:
         if ver_triangulacion and mundo.etapa == "inspeccion":
             viz = getattr(plan_inspeccion, "viz", None)
             if viz is not None:
-                self._dibujar_triangulacion(mundo, viz.get("arbol", []))
+                self._dibujar_triangulacion(mundo, viz.get("arbol", []),
+                                            ver_generaciones=ver_generaciones)
 
     def _draw_inspeccion(self, mundo: Mundo):
         """Dibuja el resultado visible de la inspeccion de baldosas, que es el
@@ -311,31 +314,37 @@ class Renderer:
             paleta.append((int(r * 255), int(g * 255), int(b * 255)))
         return paleta
 
-    def _draw_capa_voronoi(self, mundo, plan, plan_inspeccion):
+    def _draw_capa_voronoi(self, mundo, plan, plan_inspeccion,
+                           ver_generaciones=None):
         """Orquesta la capa segun que voronoi esta activo.
 
         - Etapa de Inspeccion: `InspeccionVoronoi` (Fase 3, descomposicion
-          recursiva con barrera de generacion por region). Muestra los
-          bordes del primer Voronoi (nivel 0) y las tareas de la generacion
-          activa (numeros con colores).
+          recursiva con barrera de generacion por region). Muestra las figuras
+          Gen 0 del Voronoi geodesico (enumeradas junto a sus vertices), la
+          triangulacion (ear-clipping Gen 1 + subdivision ternaria Gen 2..n) y
+          las tareas de la subasta de la generacion activa (numeros con colores).
         - Etapa de Exploracion: `VoronoiExploracion` (Fase 2, particion por robot).
         """
         if mundo.etapa == "inspeccion" and plan_inspeccion is not None:
             viz = getattr(plan_inspeccion, "viz", None)
             if viz is None:
                 return
-            if "nivel0" in viz and viz["nivel0"] is not None:
-                self._dibujar_bordes(mundo, viz["nivel0"])
-            # Dibujar contornos de Voronoi Gen 0
-            for poly, _, _ in viz.get("figuras_gen0", []):
-                if len(poly) >= 3:
-                    pts = [(int(p[0]), int(p[1])) for p in poly]
-                    pts.append(pts[0])
-                    pygame.draw.lines(self.screen, (240, 230, 255), False, pts, 2)
-            # Dibujar lineas de los triangulos de la triangulacion recursiva
-            self._dibujar_lineas_triangulos(mundo, viz.get("triangulos", []))
-            self._dibujar_tareas_inspeccion(mundo, plan_inspeccion,
-                                            viz.get("tareas", []))
+            # Capa continua: figuras Gen 0 del Voronoi GEODESICO enumeradas
+            # junto a sus vertices. El contorno de cada region sigue las aristas
+            # internas de las paredes; las paredes quedan omitidas del analisis.
+            # La particion geodesica discreta (`nivel0`) es del task allocation
+            # y no se mezcla en esta capa.
+            self._dibujar_figuras_voronoi_enum(mundo, viz.get("figuras_gen0", []))
+            # Triangulacion Gen 1 (abanico desde el centroide) y Gen 2..n
+            # (subdivision ternaria homogenea hacia el centroide), filtradas
+            # por generacion.
+            self._dibujar_lineas_triangulos(mundo, viz.get("triangulos", []),
+                                            ver_generaciones)
+            # Puntos de interes: numero de generacion + cuadro en el centroide
+            # de cada figura, coloreados por coste (heatmap rojo = importante,
+            # azul = menos importante). Desaparecen al inspeccionar.
+            self._dibujar_puntos_interes(mundo, plan_inspeccion,
+                                         ver_generaciones=ver_generaciones)
             return
         gen = getattr(plan, "_generador", None)
         if isinstance(gen, VoronoiExploracion) and gen._viz.get("mapa") is not None:
@@ -343,45 +352,93 @@ class Renderer:
             self._dibujar_bordes(mundo, gen._viz["mapa"])
             self._dibujar_explo_objetivos(mundo, gen._viz.get("objetivos", []))
 
+    def _dibujar_figuras_voronoi_enum(self, mundo, figuras):
+        """Dibuja las figuras Gen 0 del Voronoi enumeradas: poligono relleno
+        semitransparente con borde del color de su region, numero de la figura
+        cerca del centroide y cada vertice marcado con su indice (0..n-1)."""
+        gs = mundo.cfg.grid_size
+        paleta = self._paleta_regiones(max(1, len(figuras)))
+        fill = pygame.Surface(self.screen.get_size(), pygame.SRCALPHA)
+        font_fig = pygame.font.SysFont("Arial", max(12, gs // 2))
+        font_v = pygame.font.SysFont("Arial", 10)
+        for fig in figuras:
+            verts = fig.get("vertices") or []
+            if len(verts) < 3:
+                continue
+            idx = int(fig.get("indice", 0))
+            col = paleta[idx % len(paleta)]
+            pts = [(int(p[0]), int(p[1])) for p in verts]
+            fill.fill((0, 0, 0, 0))
+            pygame.draw.polygon(fill, (col[0], col[1], col[2], 45), pts)
+            self.screen.blit(fill, (0, 0))
+            pygame.draw.polygon(self.screen, col, pts, 2)
+            # Huecos de la region (ciudadela de pared interna rodeada por ella):
+            # se dibuja su contorno para que la pared quede visible.
+            for hueco in fig.get("huecos") or []:
+                hp = [(int(p[0]), int(p[1])) for p in hueco]
+                if len(hp) >= 3:
+                    pygame.draw.polygon(self.screen, col, hp, 1)
+            cx, cy = fig.get("centroide_xy", (0.0, 0.0))
+            surf = font_fig.render(str(idx), True, (255, 255, 255))
+            self.screen.blit(surf, (int(cx) - surf.get_width() // 2,
+                                    int(cy) - surf.get_height() // 2))
+            for k, (vx, vy) in enumerate(verts):
+                vp = (int(vx), int(vy))
+                pygame.draw.circle(self.screen, (255, 255, 255), vp, 3)
+                surf_v = font_v.render(str(k), True, (40, 40, 55))
+                self.screen.blit(surf_v, (vp[0] + 4, vp[1] + 4))
+
     def _color_interes(self, t):
-        """Heatmap INVERTIDO del interes de mercado (`peso * ajuste`): t=0
-        (interes/costo bajo) rojo/urgente, t=1 (interes/costo alto) azul/menos
-        prioritario. El numero de cada tarea se pinta con este color."""
+        """Heatmap del coste: t=0 (coste bajo = mas importante, zonas con
+        fallas) rojo/urgente, t=1 (coste alto = menos importante) azul."""
         t = max(0.0, min(1.0, t))
         r, g, b = colorsys.hsv_to_rgb(0.65 * t, 0.60, 0.95)
         return (int(r * 255), int(g * 255), int(b * 255))
 
-    def _dibujar_lineas_triangulos(self, mundo, triangulos):
-        """Dibuja las aristas de los triangulos de la triangulacion recursiva."""
+    def _dibujar_lineas_triangulos(self, mundo, triangulos, ver_generaciones=None):
+        """Dibuja las aristas de los triangulos de la triangulacion recursiva.
+        Solo se pintan las generaciones presentes en `ver_generaciones`
+        (dict generacion -> bool); si es None se dibujan todas."""
         for tri, nivel, raiz_id in triangulos:
+            if ver_generaciones is not None and not ver_generaciones.get(nivel, True):
+                continue
             if len(tri) >= 3:
                 pts = [(int(p[0]), int(p[1])) for p in tri]
                 pts.append(pts[0])
                 col = (190, 190, 220) if nivel == 1 else (135, 135, 165)
                 pygame.draw.lines(self.screen, col, False, pts, 1)
 
-    def _dibujar_triangulacion(self, mundo, arbol):
+    def _dibujar_triangulacion(self, mundo, arbol, ver_generaciones=None):
         """Triangulacion recursiva como capa superior: dibuja con lineas
         blancas el contorno de cada figura y sub-figura del arbol, y un punto
         blanco en el centroide de cada una. Recorre el arbol recursivamente
         en profundidad (gen0 -> gen1 -> gen2 -> ...).
         `arbol` es la lista de nodos {centroide: (r,c), vertices: [(px,py)...],
-        nivel: int, hijos: [...]}."""
+        nivel: int, hijos: [...]}.
+        Solo se dibujan los nodos cuya generacion esta visible en
+        `ver_generaciones` (dict generacion -> bool); None dibuja todo."""
         gs = mundo.cfg.grid_size
         for nodo in arbol:
+            gen = nodo.get("generacion", 0)
+            if ver_generaciones is not None and gen >= 1 and not ver_generaciones.get(gen, True):
+                continue
             verts = nodo.get("vertices") or []
             if len(verts) >= 3:
                 pts = [(int(x), int(y)) for (x, y) in verts]
                 pts.append(pts[0])
                 pygame.draw.lines(self.screen, (255, 255, 255), False, pts, 1)
             cr, cc = nodo["centroide"]
-            px = cc * gs + gs / 2
-            py = cr * gs + gs / 2
+            if "centroide_xy" in nodo:
+                px, py = nodo["centroide_xy"]
+            else:
+                px = cc * gs + gs / 2
+                py = cr * gs + gs / 2
             pygame.draw.circle(self.screen, (255, 255, 255),
                                (int(px), int(py)), max(2, gs // 4))
             hijos = nodo.get("hijos")
             if hijos:
-                self._dibujar_triangulacion(mundo, hijos)
+                self._dibujar_triangulacion(mundo, hijos,
+                                            ver_generaciones=ver_generaciones)
 
     def _dibujar_mapa_particion(self, mundo, mapa, alpha=110):
         """Pinta cada celda segun su sitio (region). `mapa` es un array de
@@ -419,30 +476,35 @@ class Renderer:
                     pygame.draw.line(self.screen, color,
                                      ((c + 1) * gs, r * gs), ((c + 1) * gs, r * gs + gs), 1)
 
-    def _dibujar_tareas_inspeccion(self, mundo, planificador, tareas):
-        """Tareas de la generacion activa (barrera por region raiz): solo se
-        dibuja la tarea cuyo nivel coincide con el minimo nivel sin inspeccionar
-        de su region (`generaciones_activas` + `tarea_elegible`). El numero es
-        la generacion de recursion (0 = region raiz del primer Voronoi) y su
-        color es el heatmap INVERTIDO del interes (`peso * ajuste`): rojo =
-        interes bajo = urgente; azul = interes alto = menos prioritario. La
-        celda inspeccionada ya esta pintada por el resultado (SANA/DEFECTUOSA),
-        asi que no se repite aqui."""
+    def _dibujar_puntos_interes(self, mundo, plan_inspeccion, ver_generaciones=None):
+        """Cuadros numerados en los PUNTOS DE INTERES (centroides) de todas las
+        figuras del Voronoi/triangulacion recursiva. El numero del cuadro es la
+        GENERACION de la figura (0 = region raiz del primer Voronoi, 1..n =
+        sucesivos niveles de triangulacion). El color del numero es un heatmap
+        del INTERES DE LA FIGURA (`coste_acumulado / (generacion+1)`) comparado
+        con el resto de figuras visibles: interes mas alto (zonas con fallas =
+        mas importantes) en ROJO y interes mas bajo (sanado / menos importante)
+        en azul. Las figuras que ya han superado la prueba de inspeccion
+        desaparecen."""
         gs = mundo.cfg.grid_size
-        generaciones = planificador.generaciones_activas(mundo)
-        visibles = [t for t in tareas
-                    if planificador.tarea_elegible(t, generaciones, mundo)
-                    and not mundo.inspec[t["r"], t["c"]]]
-        valores = [t.get("coste_acumulado", t.get("peso", 1.0) * t.get("ajuste", 1.0)) for t in visibles]
-        vmin = min(valores) if valores else 1.0
-        vmax = max(valores) if valores else 1.0
-        rango = max(vmax - vmin, 1e-6)
+        figuras = getattr(plan_inspeccion, "_todas_figuras", None)
+        if not figuras:
+            return
+        selec = [f for f in figuras
+                 if (ver_generaciones is None
+                     or ver_generaciones.get(f.generacion, True))
+                 and f.inspeccion == "null"
+                 and not mundo.inspec[f.celda[0], f.celda[1]]]
+        if not selec:
+            return
+        valores = [f.coste_acumulado / (f.generacion + 1) for f in selec]
+        vmin = min(valores)
+        vmax = max(valores)
+        rango = max(vmax - vmin, 1e-9)
         font = pygame.font.SysFont("Arial", 10)
-        for t in visibles:
-            px, py = int(t["x"]), int(t["y"])
-            r, c = int(t["r"]), int(t["c"])
-            niv = int(t["nivel"])
-            if niv == 0:
+        for f, val in zip(selec, valores):
+            gen = f.generacion
+            if gen == 0:
                 tam = gs - max(2, gs // 4)
                 borde = (235, 220, 255)
                 relleno = (58, 56, 80)
@@ -452,13 +514,13 @@ class Renderer:
                 borde = (120, 118, 150)
                 relleno = (46, 46, 66)
                 fuente = font
-            interes = t["peso"] * t["ajuste"]
-            tt = 0.5 if rango <= 0 else (interes - vmin) / rango
-            col = self._color_interes(tt)
-            lado = (c * gs + (gs - tam) // 2, r * gs + (gs - tam) // 2, tam, tam)
+            px, py = int(f.centroide_xy[0]), int(f.centroide_xy[1])
+            tt = (val - vmin) / rango
+            col = self._color_interes(1 - tt)
+            lado = (px - tam // 2, py - tam // 2, tam, tam)
             pygame.draw.rect(self.screen, relleno, lado)
             pygame.draw.rect(self.screen, borde, lado, 1)
-            surf = fuente.render(str(niv), True, col)
+            surf = fuente.render(str(gen), True, col)
             self.screen.blit(surf, (px - surf.get_width() // 2,
                                     py - surf.get_height() // 2))
 

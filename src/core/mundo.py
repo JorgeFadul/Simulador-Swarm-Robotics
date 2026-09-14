@@ -398,11 +398,19 @@ class Mundo:
         nuevas = 0
         for r in range(min_r, max_r + 1):
             for c in range(min_c, max_c + 1):
-                if self.explored[r, c] != 0 or self.grid[r, c] != 0:
+                if self.grid[r, c] != 0 or self.explored[r, c] == VISITED:
                     continue
                 cx = c * gs + gs / 2
                 cy = r * gs + gs / 2
                 if math.hypot(cx - x, cy - y) <= radio:
+                    # Promocion SCOUTED -> VISITED: la casilla ya se habia
+                    # divisado a distancia (explorar_desde la marco como
+                    # SCOUTED por el radio de deteccion) y ahora el robot la
+                    # cubre fisicamente. Al convertirla, se descuenta de
+                    # `_scouteadas` para no doble-contarla en el porcentaje
+                    # descubierto (scouteadas + visitadas debe ser constante).
+                    if self.explored[r, c] == SCOUTED:
+                        self._scouteadas -= 1
                     self.explored[r, c] = VISITED
                     self._visitadas += 1
                     nuevas += 1
@@ -707,7 +715,10 @@ class Mundo:
     def colocar_pared_celda(self, r, c):
         if self.es_borde(r, c):
             return False
+        if self.grid[r, c] == 1:
+            return True
         self.grid[r, c] = 1
+        self._invalidar_caches_planificacion()
         self.total_libres = int(np.sum(self.grid == 0))
         self.total_paredes = int(np.sum(self.grid == 1))
         return True
@@ -715,16 +726,29 @@ class Mundo:
     def borrar_celda(self, r, c):
         if self.es_borde(r, c):
             return False
+        if self.grid[r, c] == 0:
+            return True
         self.grid[r, c] = 0
         self.explored[r, c] = 0
+        self._invalidar_caches_planificacion()
         self.total_libres = int(np.sum(self.grid == 0))
         self.total_paredes = int(np.sum(self.grid == 1))
         return True
+
+    def _invalidar_caches_planificacion(self):
+        """Limpia las caches de rutas y despeje de aristas del planificador:
+
+        al editar el grid (pintar/borrar paredes con las herramientas) las
+        rutas ya calculadas dejan de ser validas."""
+        for attr in ("_pf_rutas", "_pf_arista", "_pf_tabla_arista", "_pf_segmento"):
+            if hasattr(self, attr):
+                delattr(self, attr)
 
     def limpiar(self):
         self.grid.fill(0)
         self.paredes.clear()
         self.robots.clear()
+        self._invalidar_caches_planificacion()
         self._crear_paredes_perimetrales()
         self.reiniciar_exploracion()
 

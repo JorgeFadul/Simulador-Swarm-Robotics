@@ -441,10 +441,16 @@ class SwarmEnvDescentralizado(gym.Env):
         self.auto_assign = auto_assign
         self.umbral_inactividad_pasos = umbral_inactividad_pasos
 
+        # Radio de vecindad para el contador de robots vecinos: variable que
+        # multiplica el radio del robot (default 5x -> 3.5cm * 5 = 17.5cm).
+        self.radio_vecindad_px = getattr(self.cfg, "rl_vecindad_radio_px",
+                                         self.cfg.robot_radius_px * 5.0)
+
         # Tamaño fijo del parche y vectores
         self.n_patch = patch_size * patch_size
         # Obs: patch_size^2 + 1 (alerta) + max_neighbors*3 (vecinos) + 2 (bateria, inactividad)
-        self.obs_dim = self.n_patch + 1 + (self.max_neighbors * 3) + 2
+        #      + 1 (contador de robots vecinos dentro del radio de vecindad)
+        self.obs_dim = self.n_patch + 1 + (self.max_neighbors * 3) + 2 + 1
         self.observation_space = gym.spaces.Box(
             low=0.0, high=1.0, shape=(self.obs_dim,), dtype=np.float32
         )
@@ -581,6 +587,18 @@ class SwarmEnvDescentralizado(gym.Env):
         # sin moverse. Permite que la politica aprenda a evitar quedarse quieto.
         t_sin_mov = self._tiempo_sin_mov.get(id(rb), 0.0)
         obs[base_st + 1] = np.clip(t_sin_mov / max(self.umbral_quieto_s * 3, 1e-6), 0.0, 1.0)
+
+        # 5. Contador de robots vecinos dentro del radio de vecindad (normalizado):
+        #    cuantos robots hay dentro de rl_vecindad_radio_mult * robot_radius_px.
+        #    El robot es consciente de cuantos pares tiene alrededor.
+        vecinos_radio = 0
+        for other in self._robots:
+            if other is rb:
+                continue
+            if np.hypot(other.x - rb.x, other.y - rb.y) <= self.radio_vecindad_px:
+                vecinos_radio += 1
+        max_vecinos = max(1, len(self._robots) - 1)
+        obs[self.obs_dim - 1] = min(vecinos_radio / max_vecinos, 1.0)
 
         return obs
 
@@ -768,9 +786,15 @@ class SwarmEnvExploracionDescentralizado(gym.Env):
         self.auto_assign = auto_assign
         self.reward_mode = reward_mode
 
+        # Radio de vecindad para el contador de robots vecinos: variable que
+        # multiplica el radio del robot (default 5x -> 3.5cm * 5 = 17.5cm).
+        self.radio_vecindad_px = getattr(self.cfg, "rl_vecindad_radio_px",
+                                         self.cfg.robot_radius_px * 5.0)
+
         self.n_patch = patch_size * patch_size
-        # Obs: patch_size^2 + (max_neighbors * 4) [dx, dy, dist, act_descubrimiento] + 2 [bateria, act_propia]
-        self.obs_dim = self.n_patch + (self.max_neighbors * 4) + 2
+        # Obs: patch_size^2 + (max_neighbors * 4) [dx, dy, dist, act_descubrimiento]
+        #      + 2 [bateria, act_propia] + 1 [contador de vecinos en radio]
+        self.obs_dim = self.n_patch + (self.max_neighbors * 4) + 2 + 1
         self.observation_space = gym.spaces.Box(
             low=0.0, high=1.0, shape=(self.obs_dim,), dtype=np.float32
         )
@@ -872,6 +896,17 @@ class SwarmEnvExploracionDescentralizado(gym.Env):
         obs[base_st] = rb.energia.porcentaje_bateria / 100.0
         act_propia = self._descubrimiento_reciente.get(id(rb), 0)
         obs[base_st + 1] = np.clip(act_propia / 10.0, 0.0, 1.0)
+
+        # 4. Contador de robots vecinos dentro del radio de vecindad (normalizado):
+        #    cuantos robots hay dentro de rl_vecindad_radio_mult * robot_radius_px.
+        vecinos_radio = 0
+        for other in self._robots:
+            if other is rb:
+                continue
+            if np.hypot(other.x - rb.x, other.y - rb.y) <= self.radio_vecindad_px:
+                vecinos_radio += 1
+        max_vecinos = max(1, len(self._robots) - 1)
+        obs[self.obs_dim - 1] = min(vecinos_radio / max_vecinos, 1.0)
 
         return obs
 

@@ -226,6 +226,17 @@ class Config:
             "net_arch": ppo.get("net_arch", [256, 256]),
         }
 
+        # --- Cerebro de Mosca (bioinspirado) ---
+        fly = raw.get("fly", {}) or {}
+        self.fly_kc: int = int(fly.get("kc", 1000))
+        self.fly_weights_path: str = str(fly.get("weights_path", "models/bio/fly_swarm_latest.npz"))
+        self.fly_mutacion: float = float(fly.get("mutacion", 0.0))
+        self.fly_patch_size: int = int(fly.get("patch_size", 15))
+        # Bandera en tiempo de ejecucion: True mientras el planner activo sea el
+        # Cerebro de Mosca. Permite que la percepcion (pausa de 1s al inspeccionar)
+        # funcione tambien en la fase de exploracion del modo dos_etapas.
+        self.fly_auto_inspeccion: bool = False
+
         self.cols = self.map_width // self.grid_size
         self.rows = self.map_height // self.grid_size
 

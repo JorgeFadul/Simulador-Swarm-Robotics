@@ -108,13 +108,25 @@ class Simulacion:
                     return None
             if strat == "Cerebro Mosca (Dopamina)":
                 from ..bio.fly_controller import FlyBrainSwarmController
-                return FlyBrainSwarmController(self.cfg, rng=self.rng)
+                self.cfg.fly_auto_inspeccion = True
+                return FlyBrainSwarmController(
+                    self.cfg, rng=self.rng,
+                    n_kc=self.cfg.fly_kc,
+                    weights_path=self.cfg.fly_weights_path,
+                    mutacion=self.cfg.fly_mutacion,
+                )
             return None
 
         # Modo hibrido: Cerebro Mosca o RL como planner
         if self.cfg.estrategia_hibrido == "Cerebro Mosca (Dopamina)":
             from ..bio.fly_controller import FlyBrainSwarmController
-            return FlyBrainSwarmController(self.cfg, rng=self.rng)
+            self.cfg.fly_auto_inspeccion = True
+            return FlyBrainSwarmController(
+                self.cfg, rng=self.rng,
+                n_kc=self.cfg.fly_kc,
+                weights_path=self.cfg.fly_weights_path,
+                mutacion=self.cfg.fly_mutacion,
+            )
 
         if self.cfg.estrategia_hibrido == "RL Hibrido V3":
             try:
@@ -231,7 +243,7 @@ class Simulacion:
         # Random Walk (sin planner): solo por meta de descubrimiento
         if self.planner is None:
             return False
-        if not self.planner._alguna_vez_hubo_fronteras:
+        if not getattr(self.planner, "_alguna_vez_hubo_fronteras", False):
             return False
         # Estancamiento de exploracion
         if (self._ultimo_nuevo_descubrimiento > 0 and
@@ -273,7 +285,7 @@ class Simulacion:
         """
         exploracion_ok = mundo.porcentaje_descubierto >= self.cfg.exploration_goal
         if not exploracion_ok and self.planner is not None:
-            if self.planner._alguna_vez_hubo_fronteras:
+            if getattr(self.planner, "_alguna_vez_hubo_fronteras", False):
                 if (self._ultimo_nuevo_descubrimiento > 0 and
                         self.tiempo_simulado - self._ultimo_nuevo_descubrimiento >
                         self.cfg.transicion_tiempo_sin_scouteo_s):
@@ -370,7 +382,14 @@ class Simulacion:
             self.estado = "completado"
             self.tiempo_final = self.tiempo_simulado
             self._reportar_fin_inspeccion()
+            # Guardar memoria consolidada del enjambre bioinspirado si aplica
+            if hasattr(self.planner, "guardar_enjambre"):
+                try:
+                    self.planner.guardar_enjambre()
+                except Exception:
+                    pass
             return
+
 
         modo = self.cfg.modo_fase
 

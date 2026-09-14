@@ -35,6 +35,11 @@ class MushroomBody:
         # Sinapsis plasticas KC -> MBON: moduladas por dopamina
         self.W_kc_mbon = self.rng.uniform(0.1, 0.3, size=(n_kc, n_mbon)).astype(np.float32)
 
+        # Energia inicial de cada columna de MBON (homeostasis): el conjunto de
+        # sinapsis que inervan cada MBON se re-normaliza a esta energia tras
+        # cada actualizacion, impidiendo saturacion en el tope o erosion a cero.
+        self.norm_col_mbon = np.sqrt(np.sum(self.W_kc_mbon ** 2, axis=0)) + 1e-8
+
         self.last_kc_act = np.zeros(n_kc, dtype=np.float32)
         self.last_mbon_act = np.zeros(n_mbon, dtype=np.float32)
 
@@ -70,6 +75,16 @@ class MushroomBody:
         # Actualizar pesos manteniendo rango no negativo acotado
         self.W_kc_mbon += delta_w - (self.decay * self.W_kc_mbon)
         self.W_kc_mbon = np.clip(self.W_kc_mbon, 0.0, 2.5)
+
+        # Homeostasis de ganancia por MBON: las sinapsis que inervan cada
+        # MBON se re-normalizan a su energia inicial, de modo que la plasticidad
+        # reforma la DISTRIBUCION de pesos dentro de cada columna (cuales KCs
+        # pesan mas para ese MBON) sin que la magnitud absoluta se sature en el
+        # tope (perdida de sensibilidad) ni se erosione a cero (colapso del
+        # comportamiento). La seleccion de direccion depende de valencias
+        # RELATIVAS, por lo que la ganancia fija mantiene respuestas discriminativas.
+        normas = np.sqrt(np.sum(self.W_kc_mbon ** 2, axis=0)) + 1e-8
+        self.W_kc_mbon *= self.norm_col_mbon / normas
 
 
 class CentralComplex:
@@ -136,3 +151,42 @@ class FlyBrain:
 
         # Modulacion de sinapsis por dopamina
         self.mb.aplicar_dopamina(self.dopamina_actual)
+
+    def guardar_pesos(self, ruta_archivo: str):
+        """Guarda las matrices de pesos sinapticos consolidados en disco."""
+        np.savez_compressed(
+            ruta_archivo,
+            W_pn_kc=self.mb.W_pn_kc,
+            W_kc_mbon=self.mb.W_kc_mbon,
+            dopamina_acumulada=self.dopamina_acumulada
+        )
+
+    def cargar_pesos(self, ruta_archivo: str, mutacion: float = 0.0):
+        """Carga las matrices de pesos sinapticos desde disco.
+
+        `mutacion` (0..1): si > 0, aplica una perturbacion relativa gaussiana a
+        los pesos plasticos heredados KC->MBON (W * (1 + N(0, mutacion))),
+        imitando la variabilidad de desarrollo de la mosca: la nueva generacion
+        conserva la memoria consolidada pero con diversidad de comportamiento
+        para seguir explorando politicas alternativas.
+
+        La dopamina acumulada NO se hereda: cada run parte de 0 para que el
+        exito de una generacion sea comparable dentro de la misma.
+        """
+        data = np.load(ruta_archivo)
+        if "W_pn_kc" in data and data["W_pn_kc"].shape == self.mb.W_pn_kc.shape:
+            self.mb.W_pn_kc = data["W_pn_kc"].astype(np.float32)
+        if "W_kc_mbon" in data and data["W_kc_mbon"].shape == self.mb.W_kc_mbon.shape:
+            w = data["W_kc_mbon"].astype(np.float32)
+            if mutacion > 0.0:
+                ruido = self.mb.rng.normal(0.0, mutacion, size=w.shape).astype(np.float32)
+                w = w * (1.0 + ruido)
+            self.mb.W_kc_mbon = np.clip(w, 0.0, 2.5)
+            # El punto de equilibrio homeostatico se hereda de los pesos
+            # cargados (ya con mutacion), preservando la energia de cada MBON
+            # de la memoria consolidada.
+            self.mb.norm_col_mbon = np.sqrt(np.sum(self.mb.W_kc_mbon ** 2, axis=0)) + 1e-8
+        self.dopamina_actual = 0.0
+        self.dopamina_acumulada = 0.0
+        self.historico_dopamina = []
+

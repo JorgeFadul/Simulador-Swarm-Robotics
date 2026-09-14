@@ -80,6 +80,7 @@ class Robot:
         self.inspeccionando = False
         self.inspeccionando_timer = 0.0
         self.celda_probando = None   # (r, c) de la celda en prueba, o None
+        self._inspeccion_visita = False  # pausa iniciada al visitar (sin abandono de meta)
 
         self.energia = ConsumoEnergia(cfg)
         self.inspeccion_individual = cfg.inspeccion_individual
@@ -364,6 +365,18 @@ class Robot:
         else:
             c = int(round((self.x - gs / 2) / gs))
             r = int(round((self.y - gs / 2) / gs))
+        return self._iniciar_inspeccion_celda(mundo, r, c, forzar=forzar)
+
+    def _iniciar_inspeccion_celda(self, mundo, r, c, forzar=False):
+        """Arranca la percusion con pausa sobre la celda (r, c) dada.
+
+        Nucleo compartido por todas las estrategias: la pausa de
+        `inspeccion_pausa_s` es la UNICA via de registrar una baldosa nueva
+        (en lugar de registrarla al vuelo). Durante la pausa el robot queda
+        detenido (`inspeccionando=True`, celda resaltada en amarillo) y recien
+        al terminar `_avanzar_inspeccion` ejecuta `inspeccionar_actual`.
+        """
+        gs = self.cfg.grid_size
         if r < 0 or r >= mundo.rows or c < 0 or c >= mundo.cols:
             return False
         if mundo.grid[r, c] == 1:
@@ -409,6 +422,14 @@ class Robot:
             self.inspeccionar_actual(mundo)
             self.inspeccionando = False
             self.celda_probando = None
+            if self._inspeccion_visita and self.goal_mode and self.goal is not None:
+                self._inspeccion_visita = False
+                self.ruta = []
+                self._goal_timer = 0.0
+                self._aprox_insp_timer = 0.0
+                self.timed_out = False
+                return
+            self._inspeccion_visita = False
             self.goal_alcanzado = True
             self.timed_out = False
             strat = self.cfg._estrategia_activa(etapa=mundo.etapa)
@@ -791,10 +812,8 @@ class Robot:
             self.angle += self.omega * dt
             self.angle = math.atan2(math.sin(self.angle), math.cos(self.angle))
 
-        alineado = max(0.0, math.cos(self._diferencia_angular(destino, self.angle)))
-        self.speed = self.max_speed * (self.cfg.dirigido_avance_min
-                                       + (1.0 - self.cfg.dirigido_avance_min) * alineado)
-        self.target_speed = self.speed
+        self.speed = self.max_speed
+        self.target_speed = self.max_speed
         self.target_angle = destino
         self.state = self.MOVING
         self.vx = math.cos(self.angle) * self.speed
@@ -917,8 +936,9 @@ class Robot:
         if dist <= self.goal_reached_radius:
             self.ruta.pop(0)
 
-        if (mundo.etapa == "inspeccion" or self.cfg.modo_fase == "hibrido") \
-                and math.hypot(gx - self.x, gy - self.y) <= self.goal_reached_radius:
+        if ((mundo.etapa == "inspeccion" or self.cfg.modo_fase == "hibrido"
+                or self.cfg.fly_auto_inspeccion)
+                and math.hypot(gx - self.x, gy - self.y) <= self.goal_reached_radius):
             # Llegada permisiva (dentro del radio de llegada de la celda meta):
             # tramo final dirigido al CENTRO de la celda con presupuesto de
             # aproximacion. El presupuesto se acumula AUNQUE otros robots
@@ -928,7 +948,10 @@ class Robot:
             # sin poder cerrar la percusion.
             self._aprox_insp_timer += dt
             if self._aprox_insp_timer >= self._budget_aproximacion_insp():
-                self._iniciar_inspeccion(mundo, forzar=True)
+                if not self._iniciar_inspeccion(mundo, forzar=True):
+                    self.goal_alcanzado = True
+                    self.timed_out = False
+                    self._esperar_objetivo()
                 return
             tx, ty = gx, gy
         elif not self.ruta:
@@ -940,7 +963,8 @@ class Robot:
             # presupuesto `_budget_aproximacion_insp` (celda congestionada
             # por otros robots), fuerza la percusion desde donde quedo sin
             # saltos.
-            if mundo.etapa == "inspeccion" or self.cfg.modo_fase == "hibrido":
+            if (mundo.etapa == "inspeccion" or self.cfg.modo_fase == "hibrido"
+                    or self.cfg.fly_auto_inspeccion):
                 if math.hypot(gx - self.x, gy - self.y) <= self._radio_centrado_inspeccion():
                     self._iniciar_inspeccion(mundo)
                     return
@@ -1004,15 +1028,9 @@ class Robot:
         kp = self.cfg.dirigido_giro_kp
         radio_cerrado = max(self.radius, 1e-3)
 
-        # Frenado por distancia al objetivo (no al waypoint en curso): evita la
-        # orbita alrededor del punto, porque cerca del destino la velocidad baja
-        # y el radio de giro queda dentro de la tolerancia de llegada.
-        dg = math.hypot(gx - self.x, gy - self.y)
-        freno = min(1.0, dg / max(2.0 * self.goal_reached_radius, 1e-3))
-
         # Giro de esquina en el sitio: si el siguiente tramo de la ruta exige
         # girar fuerte y el robot ya esta practicamente sobre el waypoint (o ya
-        # lo estaba pivoteando), pivota en su centro (v=0) hasta alinear. Así el
+        # lo estaba pivoteando), pivota en su centro (v=0) hasta alinear. Asi el
         # arco de giro en marcha no se abre sobre la esquina: sin esto el robot
         # cortaba las esquinas, chocaba con la pared y entraba en la reactivacion
         # infinita (colision -> jitter -> re-ruta -> misma esquina) que se ve en
@@ -1055,6 +1073,8 @@ class Robot:
         if abs(diff) <= umbral:
             self.omega = 0.0
             self.angle = destino
+            self.speed = self.max_speed
+            self.target_speed = self.max_speed
         else:
             # Arco cerrado (una rueda quieta): el giro es proporcional (no
             # bang-bang) y la velocidad de avance se limita a `omega*R` para que
@@ -1064,17 +1084,12 @@ class Robot:
             # cerrando (transicion suave hacia el pivotaje).
             omega_deseada = min(self.turn_speed, kp * abs(diff))
             self.omega = math.copysign(omega_deseada, diff)
-            alineado = max(0.0, math.cos(diff))
-            v_avance = self.max_speed * freno * (self.cfg.dirigido_avance_min
-                                                 + (1.0 - self.cfg.dirigido_avance_min) * alineado)
-            self.speed = min(v_avance, omega_deseada * radio_cerrado)
             self.angle += self.omega * dt
             self.angle = math.atan2(math.sin(self.angle), math.cos(self.angle))
+            # Velocidad lineal limitada por el radio de giro físico del robot
+            self.speed = min(self.max_speed, omega_deseada * radio_cerrado)
+            self.target_speed = self.speed
 
-        alineado = max(0.0, math.cos(self._diferencia_angular(destino, self.angle)))
-        self.speed = self.max_speed * freno * (self.cfg.dirigido_avance_min
-                                               + (1.0 - self.cfg.dirigido_avance_min) * alineado)
-        self.target_speed = self.speed
         self.target_angle = destino
         self.state = self.MOVING
         self.vx = math.cos(self.angle) * self.speed
@@ -1132,6 +1147,9 @@ class Robot:
         if self.state == self.MOVING and self.speed > 0:
             if self.speed < self.target_speed:
                 self.speed = min(self.target_speed, self.speed + 2.0 * self.max_speed * dt)
+            # Proteccion: la velocidad nunca debe superar la maxima
+            if self.speed > self.max_speed:
+                self.speed = self.max_speed
             self.vx = math.cos(self.angle) * self.speed
             self.vy = math.sin(self.angle) * self.speed
 
@@ -1180,13 +1198,22 @@ class Robot:
                 if nuevas:
                     self.visitadas_robot += nuevas
                     self._sincronizar_area_visitada(mundo)
-                    # Inspeccion al visitar: en modo hibrido (una sola etapa) se
-                    # inspecciona durante toda la simulacion; en dos etapas solo
-                    # en la etapa de Inspeccion (para no gastar energia de
-                    # percusion antes de tiempo).
+                    # En CUALQUIER estrategia la inspeccion de una baldosa usa
+                    # la percusion con pausa (`inspeccion_pausa_s`): el robot se
+                    # detiene 1s antes de registrar el resultado. Nunca se
+                    # registra al vuelo. Los robots con meta activa inspeccionan
+                    # al llegar a su destino (misma pausa); los libres
+                    # (p. ej. Random Walk) prueban la baldosa que acaban de
+                    # pisar sin detener su itinerario previo.
                     if self.cfg.inspeccionar_al_visitar and (
-                            mundo.etapa == "inspeccion" or self.cfg.modo_fase == "hibrido"):
-                        self.inspeccionar_actual(mundo)
+                            mundo.etapa == "inspeccion" or self.cfg.modo_fase == "hibrido"
+                            or self.cfg.fly_auto_inspeccion):
+                        if not (self.goal_mode and self.goal is not None
+                                and not self.goal_alcanzado):
+                            gs = self.cfg.grid_size
+                            c = int(self.x // gs)
+                            r = int(self.y // gs)
+                            self._iniciar_inspeccion_celda(mundo, r, c, forzar=True)
 
 
         exp_radius = self.detection_radius * self.cfg.exploration_radius_multiplier

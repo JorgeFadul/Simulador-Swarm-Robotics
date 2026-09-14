@@ -9,7 +9,9 @@ from src.algorithms.inspeccion import (
     Figura,
     InspeccionVoronoi,
     _poligono_voronoi_2d,
-    _subdividir_figura
+    _subdividir_figura,
+    _centroid_poligono,
+    _colapsar_escaleras
 )
 
 
@@ -80,10 +82,11 @@ def test_triangulacion_recursion_parada():
     
     # 2. Number of Gen 1 figures for each root equals number of vertices in its Voronoi polygon (minus any landing on same cell)
     for r0 in plan._raices:
-        assert len(r0.hijos) <= len(r0.vertices)
-        assert len(r0.hijos) >= 3
-        # Must not be 40 or 80!
-        assert len(r0.hijos) <= 8
+        # Una figura por arista del contorno geodesico Gen 0 (abanico C0-vj-vj+1);
+        # las zonas concavas que el centroide no ve se rellenan con ear-clipping
+        # residual y pueden anadir unos pocos triangulos mas (nunca duplicando el
+        # abanico), y nunca menos de 3 (poligono minimo).
+        assert 3 <= len(r0.hijos) <= 2 * len(r0.vertices) + 2
         
         # 3. Every child of Gen 0 must be Gen 1
         for h in r0.hijos:
@@ -144,3 +147,85 @@ def test_propagacion_costes_defecto():
     # Child's coste_acumulado should be reduced (cheaper / more urgent)
     assert child.coste_acumulado == pytest.approx(costo_previo * 0.85, rel=1e-5)
     assert r0.inspeccion == "defectuosa"
+
+
+def _mundo_dummy(grid, gs, rows, cols):
+    m = type("M", (), {})()
+    m.grid = grid
+    m.rows = rows
+    m.cols = cols
+    return m
+
+
+def test_centroid_poligono():
+    sq = [(100.0, 100.0), (200.0, 100.0), (200.0, 200.0), (100.0, 200.0)]
+    cx, cy = _centroid_poligono(sq)
+    assert (cx, cy) == pytest.approx((150.0, 150.0))
+
+    tri = [(0.0, 0.0), (0.0, 300.0), (300.0, 0.0)]
+    cx, cy = _centroid_poligono(tri)
+    assert (cx, cy) == pytest.approx((100.0, 100.0))
+
+    # Degenerado: todos los vertices colineales -> promedio (sin division por cero)
+    line = [(0.0, 0.0), (10.0, 0.0), (20.0, 0.0)]
+    cx, cy = _centroid_poligono(line)
+    assert (cx, cy) == pytest.approx((10.0, 0.0))
+
+    # El centroide de una figura debe quedar dentro de sus limites
+    asim = [(0.0, 0.0), (400.0, 0.0), (400.0, 400.0), (0.0, 800.0)]
+    cx, cy = _centroid_poligono(asim)
+    assert 0.0 <= cx <= 400.0
+
+
+def test_colapsar_escaleras_diagonal_pura():
+    gs = 10
+    rows = cols = 20
+    grid = np.zeros((rows, cols), dtype=int)
+    m = _mundo_dummy(grid, gs, rows, cols)
+
+    loop = [
+        (0, 0), (10, 0), (10, 10), (20, 10), (20, 20), (30, 20), (30, 30),
+        (30, 40), (100, 40), (100, 100), (0, 100), (0, 0),
+    ]
+    out = _colapsar_escaleras(loop, m, gs)
+    # Toda la escalera SE (0,0)->(30,40) sin obstaculos se reemplaza por una
+    # sola diagonal del vertice canonico (0,0) al final del bloque.
+    assert (0, 0) in out and (30, 40) in out
+    assert (10, 0) not in out and (10, 10) not in out and (20, 10) not in out
+    assert (20, 20) not in out and (30, 20) not in out and (30, 30) not in out
+    # Solo deben quedar los 2 vertices del tramo oblicuo mas el resto del bucle
+    assert len(out) == 5
+
+
+def test_colapsar_escaleras_respeta_paredes():
+    gs = 10
+    rows = cols = 20
+    grid = np.zeros((rows, cols), dtype=int)
+    grid[1, 1] = 1              # pared en el camino de la diagonal
+    m = _mundo_dummy(grid, gs, rows, cols)
+
+    loop = [
+        (0, 0), (10, 0), (10, 10), (20, 10), (20, 20), (30, 20), (30, 30),
+        (30, 40), (100, 40), (100, 100), (0, 100), (0, 0),
+    ]
+    out = _colapsar_escaleras(loop, m, gs)
+    # La diagonal plena (0,0)->(30,40) corta la pared en (1,1): no se colapsa.
+    # Solo se colapsa la ventana segura anclada al inicio canonico (0,0)->(10,10);
+    # el resto de la escalera se conserva (y (30,30) queda fusionado con la
+    # cola vertical colineal (30,20)->(30,40)).
+    assert (0, 0) in out and (10, 10) in out     # ventana segura colapsada
+    assert (30, 40) in out
+    assert (10, 0) not in out
+    assert (20, 10) in out and (20, 20) in out and (30, 20) in out
+    assert (30, 30) not in out                   # fusionado colineal
+    assert len(out) == 9
+
+
+def test_colapsar_no_altera_poligono_recto():
+    gs = 10
+    rows = cols = 10
+    grid = np.zeros((rows, cols), dtype=int)
+    m = _mundo_dummy(grid, gs, rows, cols)
+
+    loop = [(10, 10), (90, 10), (90, 90), (10, 90)]
+    assert _colapsar_escaleras(loop, m, gs) == loop

@@ -204,6 +204,7 @@ class RLControllerV3DES:
         self._ult_pos_robot = {}   # {id(robot): (x, y)}
         self._tiempo_sin_mov = {}  # {id(robot): segundos sin moverse}
         self.umbral_quieto_s = 2.0
+        self.radio_vecindad_px = None  # se fija en actualizar desde mundo.cfg
 
         if model_path and os.path.exists(model_path):
             if PPO is None:
@@ -220,7 +221,9 @@ class RLControllerV3DES:
         n_patch = self.patch_size * self.patch_size
         n_asignados = 0
 
-        # Actualizar tracking de quietud fisica: cada ciclo del controlador, si
+        # Radio de vecindad desde la config del mundo (variable).
+        self.radio_vecindad_px = getattr(mundo.cfg, "rl_vecindad_radio_px",
+                                        5.0 * getattr(mundo.cfg, "robot_radius_px", 17.5))
         # un robot no cambio de posicion acumula tiempo sin moverse; si se movio
         # se resetea. (El dt estimado no se conoce aqui, por lo que se usa un
         # incremento unitario por ciclo para alimentar la senal de observacion.)
@@ -253,7 +256,7 @@ class RLControllerV3DES:
             c_center = int(rb.x // gs)
 
             # Construir obs egocentrica para este robot
-            obs = np.zeros(n_patch + 1 + (self.max_neighbors * 3) + 2, dtype=np.float32)
+            obs = np.zeros(n_patch + 1 + (self.max_neighbors * 3) + 2 + 1, dtype=np.float32)
 
             idx = 0
             for dr in range(-half_k, half_k + 1):
@@ -308,6 +311,15 @@ class RLControllerV3DES:
             # tiempo sin moverse normalizado a umbral_quieto_s * 3.
             t_sin_mov = self._tiempo_sin_mov.get(id(rb), 0.0)
             obs[base_st + 1] = float(np.clip(t_sin_mov / max(self.umbral_quieto_s * 3, 1e-6), 0.0, 1.0))
+
+            # Contador de robots vecinos dentro del radio de vecindad (normalizado).
+            vecinos_radio = 0
+            for other in robots:
+                if other is rb:
+                    continue
+                if np.hypot(other.x - rb.x, other.y - rb.y) <= self.radio_vecindad_px:
+                    vecinos_radio += 1
+            obs[-1] = min(vecinos_radio / max(1, len(robots) - 1), 1.0)
 
             action, _ = self.model.predict(obs, deterministic=True)
             act = int(action)
@@ -376,6 +388,7 @@ class RLControllerExploracionV3:
         self.radio_comunicacion_px = radio_comunicacion_px
         self.model = None
         self._descubrimiento_previo = {}
+        self.radio_vecindad_px = None  # se fija en actualizar desde mundo.cfg
 
         if model_path and os.path.exists(model_path):
             if PPO is None:
@@ -392,6 +405,10 @@ class RLControllerExploracionV3:
         n_patch = self.patch_size * self.patch_size
         n_asignados = 0
 
+        # Radio de vecindad desde la config del mundo (variable).
+        self.radio_vecindad_px = getattr(mundo.cfg, "rl_vecindad_radio_px",
+                                        5.0 * getattr(mundo.cfg, "robot_radius_px", 17.5))
+
         # Calcular actividad reciente de descubrimiento de cada robot
         actividad = {}
         for rb in robots:
@@ -407,7 +424,7 @@ class RLControllerExploracionV3:
             r_center = int(rb.y // gs)
             c_center = int(rb.x // gs)
 
-            obs = np.zeros(n_patch + (self.max_neighbors * 4) + 2, dtype=np.float32)
+            obs = np.zeros(n_patch + (self.max_neighbors * 4) + 2 + 1, dtype=np.float32)
 
             # 1. Parche local de exploracion
             idx = 0
@@ -449,6 +466,15 @@ class RLControllerExploracionV3:
             base_st = base_n + self.max_neighbors * 4
             obs[base_st] = rb.energia.porcentaje_bateria / 100.0
             obs[base_st + 1] = np.clip(actividad.get(id(rb), 0) / 10.0, 0.0, 1.0)
+
+            # Contador de robots vecinos dentro del radio de vecindad (normalizado).
+            vecinos_radio = 0
+            for other in robots:
+                if other is rb:
+                    continue
+                if np.hypot(other.x - rb.x, other.y - rb.y) <= self.radio_vecindad_px:
+                    vecinos_radio += 1
+            obs[-1] = min(vecinos_radio / max(1, len(robots) - 1), 1.0)
 
             action, _ = self.model.predict(obs, deterministic=True)
             act = int(action)
