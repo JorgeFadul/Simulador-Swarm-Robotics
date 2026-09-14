@@ -122,13 +122,42 @@ def correr_headless(cfg, seed):
 
 
 def correr_gui(cfg):
+    import os
     import tkinter as tk
     import pygame
 
-    sim = Simulacion(cfg)
     root = tk.Tk()
     root.withdraw()
-    stats = StatsWindow(root, sim)
+    # Area disponible y viewport cuadrado AxA (solo visual).
+    try:
+        root.update_idletasks()
+        sw = root.winfo_screenwidth()
+        sh = root.winfo_screenheight()
+    except Exception:
+        sw, sh = 1600, 900
+    reserva_x = 430 + 480  # panel izq + panel der aprox
+    # Mitad derecha para el simulador: ancho disponible = media pantalla.
+    mitad_w = sw // 2
+    alto_disp = max(300, sh - 80)
+    lado = min(max(300, mitad_w - 40), alto_disp)
+    # Posicionar la ventana pygame en la mitad derecha, centrada.
+    pos_x = mitad_w + max(0, (mitad_w - lado) // 2)
+    pos_y = max(0, (alto_disp - lado) // 2)
+    try:
+        os.environ["SDL_VIDEO_WINDOW_POS"] = f"{pos_x},{pos_y}"
+    except Exception:
+        pass
+
+    sim = Simulacion(cfg, view_size=lado)
+    try:
+        sim.set_view_side(lado)
+    except Exception:
+        pass
+    stats = StatsWindow(root, sim, lado_viewport=sim.view_side or lado)
+    try:
+        stats.window.update_idletasks()
+    except Exception:
+        pass
 
     reloj = pygame.time.Clock()
     running = True

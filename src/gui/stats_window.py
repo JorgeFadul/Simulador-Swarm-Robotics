@@ -44,18 +44,54 @@ _PARAM_LABELS = {
 
 
 class StatsWindow:
-    def __init__(self, parent, simulacion):
+    def __init__(self, parent, simulacion, lado_viewport=None):
         self.sim = simulacion
         self._alive = True
 
         self.window = tk.Toplevel(parent)
-        self.window.title("Estadisticas de Exploracion")
-        self.window.geometry("520x680")
-        self.window.resizable(False, False)
+        self.window.title("Panel de Control - Simulador Swarm 2D")
+        try:
+            sw = self.window.winfo_screenwidth()
+            sh = self.window.winfo_screenheight()
+        except Exception:
+            sw, sh = 1600, 900
+        media = max(600, sw // 2)
+        alto = max(450, int((sh - 60) * 0.9))
+        self.window.geometry(f"{media}x{alto}+0+0")
+        self.window.resizable(True, True)
         self.window.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        notebook = ttk.Notebook(self.window)
+        # Layout Opcion A: izquierda Controles+Estrategia,
+        # derecha Global+Individual+Cobertura en pestanas.
+        main = ttk.Frame(self.window)
+        main.pack(fill="both", expand=True)
+        main.grid_columnconfigure(0, weight=0)
+        main.grid_columnconfigure(1, weight=1)
+        main.grid_rowconfigure(0, weight=1)
+
+        left = ttk.Frame(main, width=430)
+        left.grid(row=0, column=0, sticky="nsew")
+        left.grid_propagate(False)
+        right = ttk.Frame(main)
+        right.grid(row=0, column=1, sticky="nsew")
+
+        # --- Izquierda: Controles arriba, Estrategia abajo ---
+        paned_left = ttk.PanedWindow(left, orient="vertical")
+        paned_left.pack(fill="both", expand=True, padx=4, pady=4)
+        frame_ctrl = ttk.LabelFrame(paned_left, text="Controles y Edicion")
+        frame_estr = ttk.LabelFrame(paned_left, text="Estrategia")
+        paned_left.add(frame_ctrl, weight=1)
+        paned_left.add(frame_estr, weight=1)
+        self._build_controls_tab(frame_ctrl)
+        self._build_strategy_tab(frame_estr)
+
+        # --- Derecha: pestanas como antes ---
+        notebook = ttk.Notebook(right)
         notebook.pack(fill="both", expand=True, padx=4, pady=4)
+
+        frame_global = ttk.Frame(notebook)
+        notebook.add(frame_global, text="Global")
+        self._build_global_tab(frame_global)
 
         frame_ind = ttk.Frame(notebook)
         notebook.add(frame_ind, text="Individual")
@@ -65,20 +101,36 @@ class StatsWindow:
         notebook.add(frame_cob, text="Cobertura")
         self._build_cobertura_tab(frame_cob)
 
-        frame_global = ttk.Frame(notebook)
-        notebook.add(frame_global, text="Global")
-        self._build_global_tab(frame_global)
-
-        frame_ctrl = ttk.Frame(notebook)
-        notebook.add(frame_ctrl, text="Controles")
-        self._build_controls_tab(frame_ctrl)
-
-        frame_estr = ttk.Frame(notebook)
-        notebook.add(frame_estr, text="Estrategias")
-        self._build_strategy_tab(frame_estr)
-
         self._img_tk = None
         self._img_robot_tk = None
+
+    def actualizar_viewport(self, lado):
+        # Compatibilidad: ya no hay placeholder central en el panel.
+        self._lado_viewport = lado
+
+    @staticmethod
+    def _bind_rueda(canvas):
+        """Rueda del mouse en Windows/macOS/Linux, incluso sobre widgets hijos."""
+        def _scroll(ev):
+            try:
+                if hasattr(ev, "delta") and ev.delta:
+                    canvas.yview_scroll(int(-1 * (ev.delta / 120)), "units")
+                elif getattr(ev, "num", None) == 4:
+                    canvas.yview_scroll(-1, "units")
+                elif getattr(ev, "num", None) == 5:
+                    canvas.yview_scroll(1, "units")
+            except Exception:
+                pass
+            return "break"
+        canvas.bind("<Enter>", lambda _e: (
+            canvas.bind_all("<MouseWheel>", _scroll),
+            canvas.bind_all("<Button-4>", _scroll),
+            canvas.bind_all("<Button-5>", _scroll)))
+        canvas.bind("<Leave>", lambda _e: (
+            canvas.unbind_all("<MouseWheel>"),
+            canvas.unbind_all("<Button-4>"),
+            canvas.unbind_all("<Button-5>")))
+        return _scroll
 
     def _on_close(self):
         self._alive = False
@@ -136,9 +188,7 @@ class StatsWindow:
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        canvas.bind("<MouseWheel>", _on_mousewheel)
+        self._bind_rueda(canvas)
         self._scroll_canvas = canvas
 
         f = ttk.Frame(scroll_frame, padding=12)
@@ -289,9 +339,7 @@ class StatsWindow:
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        canvas.bind("<MouseWheel>", _on_mousewheel)
+        self._bind_rueda(canvas)
 
         f = ttk.Frame(scroll_frame, padding=12)
         f.pack(fill="both", expand=True)

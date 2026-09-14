@@ -11,7 +11,6 @@ from ..algorithms.exploration import VoronoiExploracion
 class Renderer:
     def __init__(self, screen: pygame.Surface):
         self.screen = screen
-        self._thumb_bg = None
 
     def draw(self, mundo: Mundo, estado="running", plan=None,
              plan_inspeccion=None,
@@ -38,8 +37,6 @@ class Renderer:
         if ver_intencion:
             self._draw_intents(mundo)
         self._draw_robots(mundo)
-        if mundo.robots:
-            self._draw_robot_thumbnails(mundo)
         # La triangulacion es una capa superior: queda por encima de todo.
         if ver_triangulacion and mundo.etapa == "inspeccion":
             viz = getattr(plan_inspeccion, "viz", None)
@@ -240,66 +237,6 @@ class Renderer:
                 vel_x = int(robot.x + robot.vx * 0.1)
                 vel_y = int(robot.y + robot.vy * 0.1)
                 pygame.draw.line(self.screen, (255, 200, 50), (cx, cy), (vel_x, vel_y), 1)
-
-    def _draw_robot_thumbnails(self, mundo: Mundo):
-        robots = mundo.robots
-        if not robots:
-            return
-
-        rows, cols = mundo.rows, mundo.cols
-        thumb_size = 50
-        per_row = 4
-        n = len(robots)
-        grid_rows = (n + per_row - 1) // per_row
-        gap, pad = 2, 10
-        panel_w = per_row * thumb_size + (per_row - 1) * gap + pad * 2
-        panel_h = grid_rows * thumb_size + (grid_rows - 1) * gap + pad * 2 + 14
-        panel_x = self.screen.get_width() - panel_w - 8
-        panel_y = self.screen.get_height() - panel_h - 8
-
-        s = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
-        s.fill((0, 0, 0, 170))
-        self.screen.blit(s, (panel_x, panel_y))
-        font = pygame.font.SysFont("Arial", 9)
-        font.render("Indiv.", True, (180, 180, 180))
-
-        if not hasattr(self, "_thumb_cache"):
-            self._thumb_cache = {}
-
-        for i, robot in enumerate(robots):
-            col_idx = i % per_row
-            row_idx = i // per_row
-            tx = panel_x + pad + col_idx * (thumb_size + gap)
-            ty = panel_y + pad + 12 + row_idx * (thumb_size + gap)
-
-            # Caché del thumbnail: solo se regenera la superficie cuando cambia
-            # el mapa explorado propio del robot (evita crear Surface por frame).
-            firma = hash(robot.explored_robot.tobytes())
-            key = (id(robot), firma)
-            cached = self._thumb_cache.get(key)
-            if cached is None:
-                labels = {SCOUTED: (0, 55, 0), VISITED: (0, 110, 0),
-                          DISCOVERED: (110, 0, 0)}
-                bg_free = (25, 25, 35)
-                bg_wall = (40, 20, 20)
-                arr = np.zeros((rows, cols, 3), dtype=np.uint8)
-                for r in range(rows):
-                    for c in range(cols):
-                        val = robot.explored_robot[r, c]
-                        if mundo.grid[r, c] == 0:
-                            arr[r, c] = labels.get(val, bg_free)
-                        else:
-                            arr[r, c] = labels.get(val, bg_wall)
-                surf = pygame.surfarray.make_surface(arr.transpose(1, 0, 2))
-                cached = pygame.transform.scale(surf, (thumb_size, thumb_size))
-                # Limita el tamaño de la caché para no retener superficies viejas
-                if len(self._thumb_cache) > 200:
-                    self._thumb_cache.clear()
-                self._thumb_cache[key] = cached
-            self.screen.blit(cached, (tx, ty))
-
-            lbl = font.render(str(i), True, (200, 200, 200))
-            self.screen.blit(lbl, (tx + 2, ty + 2))
 
     # ------------------------------------------------------------------
     # Capa de visualizacion del Voronoi (toggle `V`)

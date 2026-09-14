@@ -10,22 +10,33 @@ from ..algorithms.inspeccion import InspeccionVoronoi, InspectionPlanner
 
 
 class Simulacion:
-    def __init__(self, cfg: Config, seed=None, headless=False):
+    def __init__(self, cfg: Config, seed=None, headless=False, view_size=None):
         self.cfg = cfg
         self.headless = headless
         self.rng = np.random.default_rng(seed)
         self.seed = seed
 
+        # Zoom puramente visual: la simulacion trabaja en px logicos
+        # (map_width x map_height); solo el blit final se escala a AxA.
+        self.zoom = 1.0
+        self.view_side = None  # lado A del viewport cuadrado en px de pantalla
+
         if not headless:
             pygame.init()
-            self.screen = pygame.display.set_mode((cfg.map_width, cfg.map_height))
+            lado = int(view_size) if view_size else cfg.map_width
+            lado = max(200, lado)
+            self.screen = pygame.display.set_mode((lado, lado), pygame.RESIZABLE)
             pygame.display.set_caption("Simulador Swarm 2D - Editor")
             self.clock = pygame.time.Clock()
-            self.renderer = Renderer(self.screen)
+            # Buffer logico + renderer: todo se dibuja aqui en coords de sim.
+            self._buf = pygame.Surface((cfg.map_width, cfg.map_height))
+            self.renderer = Renderer(self._buf)
+            self._actualizar_zoom()
         else:
             self.screen = None
             self.clock = None
             self.renderer = None
+            self._buf = None
 
         self.mundo = Mundo(cfg, rng=self.rng)
 
@@ -56,6 +67,40 @@ class Simulacion:
         self._ultimo_nuevo_inspeccionado = 0.0
         self._fin_reportado = False
 
+    def _actualizar_zoom(self):
+        """Recalcula el zoom visual desde el tamano real de la ventana."""
+        if self.headless or self.screen is None:
+            self.zoom = 1.0
+            return
+        w, h = self.screen.get_size()
+        lado = min(w, h)
+        if lado < 1:
+            lado = 1
+        self.view_side = lado
+        base = min(self.cfg.map_width, self.cfg.map_height)
+        self.zoom = lado / base if base else 1.0
+
+    def set_view_side(self, lado):
+        """Fija el viewport cuadrado a AxA px de pantalla (solo visual)."""
+        if self.headless or self.screen is None:
+            return
+        lado = max(200, int(lado))
+        self.screen = pygame.display.set_mode((lado, lado), pygame.RESIZABLE)
+        self._actualizar_zoom()
+
+    def _a_coords_sim(self, pos):
+        """Convierte pos de pantalla a coords logicas de simulacion."""
+        x, y = pos
+        if self.headless or self.screen is None:
+            return (x, y)
+        w, h = self.screen.get_size()
+        lado = self.view_side or min(w, h)
+        # Viewport cuadrado centrado: compensar bandas letterbox.
+        ox = (w - lado) / 2.0
+        oy = (h - lado) / 2.0
+        z = self.zoom or 1.0
+        return ((x - ox) / z, (y - oy) / z)
+
     @property
     def transicionado(self):
         """True si ya se transiciono a la etapa de Inspeccion (modo dos_etapas)."""
@@ -71,6 +116,11 @@ class Simulacion:
 
     def _reconstruir_mundo(self):
         self.mundo = Mundo(self.cfg, rng=self.rng)
+        if not self.headless and self.screen is not None:
+            import pygame as _pg
+            self._buf = _pg.Surface((self.cfg.map_width, self.cfg.map_height))
+            self.renderer.screen = self._buf
+            self._actualizar_zoom()
         self.tiempo_simulado = 0.0
         self.pasos_totales = 0
         self.tiempo_final = None
@@ -436,6 +486,12 @@ class Simulacion:
             self._ultimo_nuevo_inspeccionado = self.tiempo_simulado
 
     def manejar_evento(self, event):
+        if event.type == pygame.VIDEORESIZE:
+            # Mantener viewport cuadrado AxA encajado en la ventana.
+            lado = min(event.w, event.h)
+            self.screen = pygame.display.set_mode((lado, lado), pygame.RESIZABLE)
+            self._actualizar_zoom()
+            return
         if event.type == pygame.KEYDOWN and event.key == pygame.K_v:
             self.ver_voronoi = not self.ver_voronoi
 
@@ -454,11 +510,11 @@ class Simulacion:
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             self._mouse_down = True
-            self._colocar_en(event.pos)
+            self._colocar_en(self._a_coords_sim(event.pos))
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
-            self._borrar_en(event.pos)
+            self._borrar_en(self._a_coords_sim(event.pos))
         elif event.type == pygame.MOUSEMOTION and self._mouse_down:
-            self._colocar_en(event.pos)
+            self._colocar_en(self._a_coords_sim(event.pos))
         elif event.type == pygame.MOUSEBUTTONUP:
             self._mouse_down = False
             self._ult_r = -1
@@ -520,6 +576,7 @@ class Simulacion:
     def render(self):
         if self.headless or not self.mundo or self.screen is None or self.renderer is None:
             return
+        self._actualizar_zoom()
         self.renderer.draw(self.mundo, self.estado, plan=self.planner,
                            plan_inspeccion=self.planner_inspeccion,
                            ver_fronteras=self.ver_fronteras,
@@ -529,6 +586,17 @@ class Simulacion:
                            ver_voronoi=self.ver_voronoi,
                            ver_triangulacion=self.ver_triangulacion,
                            ver_generaciones=self.ver_generaciones)
+        # Escalado visual AxA: el buffer logico se escala al viewport cuadrado.
+        w, h = self.screen.get_size()
+        lado = self.view_side or min(w, h)
+        self.screen.fill((20, 20, 30))
+        try:
+            vista = pygame.transform.smoothscale(self._buf, (lado, lado))
+        except Exception:
+            vista = pygame.transform.scale(self._buf, (lado, lado))
+        ox = (w - lado) // 2
+        oy = (h - lado) // 2
+        self.screen.blit(vista, (ox, oy))
         self._draw_mode_hud()
         self._actualizar_titulo()
         pygame.display.flip()
@@ -548,7 +616,7 @@ class Simulacion:
                 y += 20
 
             titulo = fuente.render("EDITOR", True, (100, 200, 255))
-            self.screen.blit(titulo, (self.cfg.map_width - 80, 10))
+            self.screen.blit(titulo, (self.screen.get_width() - 80, 10))
             return
 
         fuente = pygame.font.SysFont("Arial", 14)
