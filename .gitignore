@@ -8,27 +8,30 @@ dist/
 build/
 *.so
 
-# === Modelos entrenados (RL y Mosca) ===
+# === Modelos y resultados (varios GB): se ignora todo por defecto ===
 models/
-*.zip
-*.npz
-*.pt
-*.pth
-*.pkl
-*.h5
-*.onnx
-
-# === Resultados de simulación y entrenamiento ===
 results/
 runs/
 *.csv
 *.log
+*.zip
+*.npz
+*.pkl
+*.pt
+*.pth
 log_*.txt
-headless_*.csv
 headless_*.json
-.DS_Store
-Thumbs.db
-runs/
+
+# === Excepciones: SOLO los modelos finales necesarios para simular
+# en otra PC tras hacer clone/pull (pesos pequenos, < 1 MB c/u) ===
+# NOTA: los finales de v1/v2 pesan >90 MB y exceden el limite de
+# GitHub (100 MB); se copian manualmente o via Git LFS.
+!models/v3_des/
+!models/v3_des/final_v3_des.zip
+!models/v3_exp/
+!models/v3_exp/final_v3_exp.zip
+!models/bio/
+!models/bio/fly_swarm_latest.npz
 
 # === Entornos virtuales ===
 venv/
