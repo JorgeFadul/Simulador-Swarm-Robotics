@@ -1,16 +1,49 @@
+# === Python ===
 __pycache__/
 *.py[cod]
+*.pyo
 *.egg-info/
-.venv/
-venv/
-env/
-.env
+*.egg
+dist/
+build/
+*.so
+
+# === Modelos entrenados (RL y Mosca) ===
+models/
+*.zip
+*.npz
+*.pt
+*.pth
+*.pkl
+*.h5
+*.onnx
+
+# === Resultados de simulación y entrenamiento ===
+results/
+runs/
+*.csv
 *.log
 log_*.txt
 headless_*.csv
 headless_*.json
-.DS_Store
-Thumbs.db
-models/
-runs/
 
+# === Entornos virtuales ===
+venv/
+.venv/
+env/
+.env
+
+# === IDE / Editor ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# === OS ===
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# === Misc ===
+.opencode/
