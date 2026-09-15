@@ -1,0 +1,22 @@
+C:\Users\jorge\OneDrive\Escritorio\Tesis Simulador 2D\Tesis\src\algorithms\inspeccion.py:85: UserWarning: A NumPy version >=1.23.5 and <2.3.0 is required for this version of SciPy (detected version 2.4.4)
+  from scipy import ndimage
+C:\Users\jorge\OneDrive\Escritorio\Tesis Simulador 2D\Tesis\src\algorithms\inspeccion.py:85: UserWarning: A NumPy version >=1.23.5 and <2.3.0 is required for this version of SciPy (detected version 2.4.4)
+  from scipy import ndimage
+C:\Users\jorge\OneDrive\Escritorio\Tesis Simulador 2D\Tesis\src\algorithms\inspeccion.py:85: UserWarning: A NumPy version >=1.23.5 and <2.3.0 is required for this version of SciPy (detected version 2.4.4)
+  from scipy import ndimage
+C:\Users\jorge\OneDrive\Escritorio\Tesis Simulador 2D\Tesis\src\algorithms\inspeccion.py:85: UserWarning: A NumPy version >=1.23.5 and <2.3.0 is required for this version of SciPy (detected version 2.4.4)
+  from scipy import ndimage
+C:\Users\jorge\OneDrive\Escritorio\Tesis Simulador 2D\Tesis\src\algorithms\inspeccion.py:85: UserWarning: A NumPy version >=1.23.5 and <2.3.0 is required for this version of SciPy (detected version 2.4.4)
+  from scipy import ndimage
+C:\Users\jorge\OneDrive\Escritorio\Tesis Simulador 2D\Tesis\src\algorithms\inspeccion.py:85: UserWarning: A NumPy version >=1.23.5 and <2.3.0 is required for this version of SciPy (detected version 2.4.4)
+  from scipy import ndimage
+C:\Users\jorge\OneDrive\Escritorio\Tesis Simulador 2D\Tesis\src\algorithms\inspeccion.py:85: UserWarning: A NumPy version >=1.23.5 and <2.3.0 is required for this version of SciPy (detected version 2.4.4)
+  from scipy import ndimage
+C:\Users\jorge\OneDrive\Escritorio\Tesis Simulador 2D\Tesis\src\algorithms\inspeccion.py:85: UserWarning: A NumPy version >=1.23.5 and <2.3.0 is required for this version of SciPy (detected version 2.4.4)
+  from scipy import ndimage
+C:\Users\jorge\OneDrive\Escritorio\Tesis Simulador 2D\Tesis\src\algorithms\inspeccion.py:85: UserWarning: A NumPy version >=1.23.5 and <2.3.0 is required for this version of SciPy (detected version 2.4.4)
+  from scipy import ndimage
+C:\Users\jorge\OneDrive\Escritorio\Tesis Simulador 2D\Tesis\src\algorithms\inspeccion.py:85: UserWarning: A NumPy version >=1.23.5 and <2.3.0 is required for this version of SciPy (detected version 2.4.4)
+  from scipy import ndimage
+C:\Users\jorge\OneDrive\Escritorio\Tesis Simulador 2D\Tesis\src\algorithms\inspeccion.py:85: UserWarning: A NumPy version >=1.23.5 and <2.3.0 is required for this version of SciPy (detected version 2.4.4)
+  from scipy import ndimage
