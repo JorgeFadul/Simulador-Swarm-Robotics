@@ -28,10 +28,12 @@ robot_turn_speed_rad_s: 3.14159
 modo_fase: "dos_etapas"
 
 # Estrategia por modo (solo la del modo activo se usa):
-#   exploracion (fase 1): Random Walk, Frontier Based, Sample Based, Hybrid,
-#                         Boustrophedon, RL Exploracion
-#   inspeccion (fase 2):  Voronoi, Boustrophedon Inspeccion, RL Inspeccion
-#   hibrido (una etapa):  Random Walk Hibrido, RL Hibrido
+#   exploracion (fase 1): Random Walk, Frontier Based, Sample Based,
+#                         Hybrid Based, Boustrophedon
+#   inspeccion (fase 2):  Random Walk, Voronoi, Boustrophedon Inspeccion,
+#                         Cerebro Mosca (Dopamina), RL Inspeccion V3
+#   hibrido (una etapa):  Random Walk Hibrido, RL Hibrido V3,
+#                         Cerebro Mosca (Dopamina)
 estrategia_exploracion: "Frontier Based"
 estrategia_inspeccion: "Voronoi"
 estrategia_hibrido: "Random Walk Hibrido"

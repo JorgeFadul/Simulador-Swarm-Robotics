@@ -557,18 +557,19 @@ class Robot:
     def _angulo_para(self, dr, dc):
         return math.atan2(dr, dc)
 
-    def _celda_practicable(self, mundo, r, c):
+    def _celda_practicable(self, mundo, r, c, ignorar_visitadas=False):
         """True si el robot puede intentar ir a la celda (r, c).
 
         Restriccion de ceguera: solo una pared DISCOVERED bloquea. Una pared
         aun no descubierta se trata como transitable: el robot intenta
         avanzar, la choca fisicamente, la descubre y en el siguiente turno
         decide el salto (asi "encuentra la pared" en vez de adivinarla).
-        Una celda ya visitada por este robot en el zigzag tambien se bloquea
-        para evitar retroceder por un area ya barrida."""
+        `ignorar_visitadas=True` se usa solo para medir el largo fisico del
+        pasillo: el avance frontal del zigzag prefiere suelo fresco y solo
+        pisa estela propia si no hay alternativa."""
         if not (0 <= r < mundo.rows and 0 <= c < mundo.cols):
             return False
-        if (r, c) in self.celdas_visitadas:
+        if not ignorar_visitadas and (r, c) in self.celdas_visitadas:
             return False
         if mundo.grid[r, c] == 1:
             return mundo.explored[r, c] != DISCOVERED
@@ -581,11 +582,12 @@ class Robot:
         return True
 
     def _contar_borde_libre(self, mundo, r, c, dr, dc):
-        """Cuantas celdas no visitadas y practicables consecutivas hay desde
-        (r, c) en (dr, dc). Usado para medir el pasillo al orientar el zigzag."""
+        """Cuantas celdas practicables consecutivas hay desde (r, c) en
+        (dr, dc). Mide el largo fisico del pasillo (ignora la estela
+        visitada) para orientar el zigzag en pasadas largas."""
         largo = 0
         nr, nc = r, c
-        while self._celda_practicable(mundo, nr, nc):
+        while self._celda_practicable(mundo, nr, nc, ignorar_visitadas=True):
             largo += 1
             nr += dr
             nc += dc
@@ -692,7 +694,8 @@ class Robot:
 
         Prefiere casillas que ningun otro robot tenga ya como objetivo de su
         plan (evita duplicar el area barrida). Si no queda ninguna libre,
-        cae a las ya reclamadas por otros. Devuelve (x, y, ruta) o None."""
+        cae a las ya reclamadas por otros.
+        Devuelve (x, y, ruta) o None."""
         idx = np.argwhere(mundo.explored == SCOUTED)
         if len(idx) == 0:
             return None
@@ -872,19 +875,24 @@ class Robot:
 
         dr, dc = zz["dir"]
         nr, nc = r + dr, c + dc
+        # Suelo fresco al frente: seguir la pasada larga.
         if self._celda_practicable(mundo, nr, nc):
             self._avanzar_recto(zz["rumbo"], dt, mundo, rep_dx, rep_dy,
                                 has_obs, colision_inminente)
-        else:
-            lateral = self._candidata_salto(mundo, r, c, zz)
-            if lateral is not None:
-                zz["modo"] = "salto"
-                zz["objetivo_celda"] = lateral
-                zz["rumbo"] = self._angulo_para(lateral[0] - r, lateral[1] - c)
-                self._iniciar_giro(zz["rumbo"])
-            else:
-                zz["modo"] = "perdido"
-                self._intentar_rescate(mundo)
+            return
+        # Frontal no fresco (visitado o bloqueo fisico): buscar salto
+        # lateral a suelo fresco (cambio de linea del zigzag).
+        lateral = self._candidata_salto(mundo, r, c, zz)
+        if lateral is not None:
+            zz["modo"] = "salto"
+            zz["objetivo_celda"] = lateral
+            zz["rumbo"] = self._angulo_para(lateral[0] - r, lateral[1] - c)
+            self._iniciar_giro(zz["rumbo"])
+            return
+        # Rodeado (solo estela visitada o bloqueo total): reubicarse en
+        # otra zona de interes y retomar direccion horizontal/vertical alli.
+        zz["modo"] = "perdido"
+        self._intentar_rescate(mundo)
 
     def _radio_evasion_activa(self):
         """Radio (px) de la repulsion que se mezcla con el rumbo dirigido.

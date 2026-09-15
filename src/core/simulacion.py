@@ -57,8 +57,9 @@ class Simulacion:
         self.ver_defectos = False
         self.ver_voronoi = True
         self.ver_triangulacion = False
-        # Visibilidad por generacion de triangulacion (1..MAX_GEN_VISIBLE)
-        self.ver_generaciones = {g: True for g in range(1, MAX_GEN_VISIBLE + 1)}
+        # Visibilidad por generacion de triangulacion (1..MAX_GEN_VISIBLE).
+        # Por defecto todas ocultas: el usuario las activa en el panel.
+        self.ver_generaciones = {g: False for g in range(1, MAX_GEN_VISIBLE + 1)}
         # Estado de fase
         self.etapa = "exploracion"
         self._total_descubierto_previo = 0
@@ -127,6 +128,10 @@ class Simulacion:
         self.planner = None
         self.planner_inspeccion = None
         self.etapa = "exploracion"
+        # El flag de auto-inspeccion de la Mosca es por corrida: si una
+        # corrida anterior uso Mosca, no debe contaminar la siguiente
+        # (p. ej. un Boustrophedon inspeccionaria cada celda con pausa).
+        self.cfg.fly_auto_inspeccion = False
         self._total_descubierto_previo = 0
         self._ultimo_nuevo_descubrimiento = 0.0
         self._total_inspeccionadas_previo = 0
@@ -226,7 +231,26 @@ class Simulacion:
             return InspeccionVoronoi(self.cfg, self.rng)
         if strat == "Boustrophedon Inspeccion":
             return InspectionPlanner(self.cfg, self.rng)
-        # RL Inspeccion u otros: por ahora retorna None (placeholder)
+        if strat == "Cerebro Mosca (Dopamina)":
+            from ..bio.fly_controller import FlyBrainSwarmController
+            self.cfg.fly_auto_inspeccion = True
+            return FlyBrainSwarmController(
+                self.cfg, rng=self.rng,
+                n_kc=self.cfg.fly_kc,
+                weights_path=self.cfg.fly_weights_path,
+                mutacion=self.cfg.fly_mutacion,
+            )
+        if strat == "RL Inspeccion V3":
+            try:
+                from ..rl.controller import RLControllerV3DES
+                model_path = getattr(self.cfg, "rl_hibrido_v3_model",
+                                     "models/v3_des/final_v3_des.zip")
+                return RLControllerV3DES(model_path=model_path, auto_assign=True)
+            except Exception as e:
+                print(f"[RL Inspeccion V3] No se pudo cargar el modelo: {e}")
+                return None
+        # Estrategia sin planner dedicado: robots quedan a la espera.
+        print(f"[Inspeccion] Sin planner para '{strat}'; robots en espera.")
         return None
 
     def _actualizar_titulo(self):
@@ -255,6 +279,9 @@ class Simulacion:
         self._ultimo_nuevo_inspeccionado = 0.0
         self._fin_reportado = False
         self.planner_inspeccion = None
+        # Flag por corrida (ver _reconstruir_mundo): el planner Mosca lo
+        # reactiva en _crear_planner/_crear_planner_inspeccion si aplica.
+        self.cfg.fly_auto_inspeccion = False
 
         for r in self.mundo.robots:
             r.reiniciar_exploracion()

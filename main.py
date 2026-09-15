@@ -8,7 +8,7 @@ import yaml
 
 from src.core.config import (
     Config, ESTRATEGIAS_EXPLORACION, ESTRATEGIAS_INSPECCION,
-    ESTRATEGIAS_HIBRIDO, ESTRATEGIAS_VALIDAS,
+    ESTRATEGIAS_HIBRIDO, ESTRATEGIAS_VALIDAS, MAPEO_ESTRATEGIAS_OCULTAS,
 )
 from src.core.simulacion import Simulacion
 from src.gui.stats_window import StatsWindow
@@ -212,10 +212,20 @@ def main():
         elif cfg.estrategia_hibrido == "RL Hibrido V2":
             cfg.num_robots = int(getattr(cfg, "rl_hibrido_v2_num_robots", 10))
 
-    # Compatibilidad: --estrategia viejo
+    # Compatibilidad: --estrategia viejo (incluye nombres ocultos legacy)
     if args.estrategia:
         old = args.estrategia
-        if old in ESTRATEGIAS_HIBRIDO:
+        if old in MAPEO_ESTRATEGIAS_OCULTAS:
+            modo_nuevo, cat_nueva, reemplazo = MAPEO_ESTRATEGIAS_OCULTAS[old]
+            print(f"[Estrategia] '{old}' esta oculta; usando '{reemplazo}'.")
+            cfg.modo_fase = modo_nuevo
+            if modo_nuevo == "hibrido":
+                cfg.estrategia_hibrido = reemplazo
+            elif cat_nueva == "inspeccion":
+                cfg.estrategia_inspeccion = reemplazo
+            else:
+                cfg.estrategia_exploracion = reemplazo
+        elif old in ESTRATEGIAS_HIBRIDO:
             cfg.modo_fase = "hibrido"
             cfg.estrategia_hibrido = old
         elif old in ESTRATEGIAS_EXPLORACION:

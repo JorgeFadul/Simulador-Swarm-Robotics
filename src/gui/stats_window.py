@@ -249,17 +249,17 @@ class StatsWindow:
         self.ver_voronoi_var = tk.BooleanVar(value=self.sim.ver_voronoi)
         self.ver_triangulacion_var = tk.BooleanVar(value=self.sim.ver_triangulacion)
         ttk.Checkbutton(vis_frame, text="Fronteras", variable=self.ver_fronteras_var,
-                        command=self._aplicar_visual).pack(side="left", padx=2)
+                        command=self._aplicar_visual).grid(row=0, column=0, padx=2, pady=2, sticky="w")
         ttk.Checkbutton(vis_frame, text="Objetivos", variable=self.ver_objetivos_var,
-                        command=self._aplicar_visual).pack(side="left", padx=2)
+                        command=self._aplicar_visual).grid(row=0, column=1, padx=2, pady=2, sticky="w")
         ttk.Checkbutton(vis_frame, text="Intencion", variable=self.ver_intencion_var,
-                        command=self._aplicar_visual).pack(side="left", padx=2)
+                        command=self._aplicar_visual).grid(row=0, column=2, padx=2, pady=2, sticky="w")
         ttk.Checkbutton(vis_frame, text="Defectos", variable=self.ver_defectos_var,
-                        command=self._aplicar_visual).pack(side="left", padx=2)
+                        command=self._aplicar_visual).grid(row=1, column=0, padx=2, pady=2, sticky="w")
         ttk.Checkbutton(vis_frame, text="Voronoi", variable=self.ver_voronoi_var,
-                        command=self._aplicar_visual).pack(side="left", padx=2)
+                        command=self._aplicar_visual).grid(row=1, column=1, padx=2, pady=2, sticky="w")
         ttk.Checkbutton(vis_frame, text="Triangulacion", variable=self.ver_triangulacion_var,
-                        command=self._aplicar_visual).pack(side="left", padx=2)
+                        command=self._aplicar_visual).grid(row=1, column=2, padx=2, pady=2, sticky="w")
 
         ttk.Separator(f, orient="horizontal").pack(fill="x", pady=(8, 2))
         ttk.Label(f, text="Generaciones de triangulacion (ver/ocultar):",
@@ -268,7 +268,7 @@ class StatsWindow:
         gen_frame.pack(fill="x", pady=4)
         self.ver_gen_vars = {}
         for g in range(1, MAX_GEN_VISIBLE + 1):
-            var = tk.BooleanVar(value=self.sim.ver_generaciones.get(g, True))
+            var = tk.BooleanVar(value=self.sim.ver_generaciones.get(g, False))
             self.ver_gen_vars[g] = var
             ttk.Checkbutton(gen_frame, text=f"G{g}", variable=var,
                             command=self._aplicar_visual).grid(
@@ -411,7 +411,7 @@ class StatsWindow:
 
         ttk.Separator(f, orient="horizontal").pack(fill="x", pady=8)
         ttk.Label(f, text="Los parametros se aplican a las estrategias que usan "
-                          "planificador (Frontier, Sample, Hybrid Based, Boustrophedon).",
+                          "planificador (Frontier, Sample, Hybrid Based).",
                   font=("Arial", 8)).pack(anchor="w", pady=(0, 4))
 
         self._build_param_section(f, "Objetivo global",

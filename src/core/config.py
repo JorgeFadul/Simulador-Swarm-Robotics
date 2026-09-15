@@ -7,21 +7,52 @@ DEFAULT_PATH = Path(__file__).resolve().parents[2] / "config" / "default.yaml"
 # --- Listas de estrategias por categoria ---
 ESTRATEGIAS_EXPLORACION = (
     "Random Walk", "Frontier Based", "Sample Based",
-    "Hybrid Based", "Boustrophedon", "RL Exploracion", "RL Exploracion V3",
-    "Cerebro Mosca (Dopamina)",
+    "Hybrid Based", "Boustrophedon",
 )
 ESTRATEGIAS_INSPECCION = (
-    "Random Walk", "Voronoi", "Boustrophedon Inspeccion", "RL Inspeccion",
+    "Random Walk", "Voronoi", "Boustrophedon Inspeccion",
+    "Cerebro Mosca (Dopamina)", "RL Inspeccion V3",
 )
 ESTRATEGIAS_HIBRIDO = (
-    "Random Walk Hibrido", "RL Hibrido", "RL Hibrido V2", "RL Hibrido V3",
+    "Random Walk Hibrido", "RL Hibrido V3",
     "Cerebro Mosca (Dopamina)",
 )
 
+# Estrategias ocultas de los dropdowns (codigo y modelos intactos, solo
+# compatibilidad con configs viejos). No usar para simulaciones nuevas.
+ESTRATEGIAS_OCULTAS = (
+    "RL Exploracion", "RL Exploracion V3",
+    "RL Inspeccion",
+    "RL Hibrido", "RL Hibrido V2",
+)
+
+# Mapeo de respaldo para configs viejos que traen un nombre oculto.
+MAPEO_ESTRATEGIAS_OCULTAS = {
+    "RL Exploracion": ("dos_etapas", "exploracion", "Frontier Based"),
+    "RL Exploracion V3": ("dos_etapas", "exploracion", "Frontier Based"),
+    "RL Inspeccion": ("dos_etapas", "inspeccion", "Voronoi"),
+    "RL Hibrido": ("hibrido", "hibrido", "Random Walk Hibrido"),
+    "RL Hibrido V2": ("hibrido", "hibrido", "Random Walk Hibrido"),
+}
 
 
-# Compatibilidad: todas las estrategias validas
-ESTRATEGIAS_VALIDAS = ESTRATEGIAS_EXPLORACION + ESTRATEGIAS_INSPECCION + ESTRATEGIAS_HIBRIDO
+
+# Compatibilidad: todas las estrategias validas (visibles + ocultas legacy)
+ESTRATEGIAS_VALIDAS = (ESTRATEGIAS_EXPLORACION + ESTRATEGIAS_INSPECCION
+                       + ESTRATEGIAS_HIBRIDO + ESTRATEGIAS_OCULTAS)
+
+
+def resolver_estrategia(modo_fase, categoria, nombre):
+    """Devuelve un nombre de estrategia visible.
+
+    Si `nombre` esta oculto, lo mapea a su reemplazo y avisa por consola.
+    `categoria` es "exploracion", "inspeccion" o "hibrido".
+    """
+    if nombre in MAPEO_ESTRATEGIAS_OCULTAS:
+        modo_nuevo, cat_nueva, reemplazo = MAPEO_ESTRATEGIAS_OCULTAS[nombre]
+        print(f"[Estrategia] '{nombre}' esta oculta; usando '{reemplazo}'.")
+        return modo_nuevo, reemplazo
+    return modo_fase, nombre
 
 # Numero maximo de generaciones de triangulacion visibles/ocultables en el GUI
 MAX_GEN_VISIBLE = 10
@@ -300,6 +331,16 @@ class Config:
             self.estrategia_inspeccion = data["estrategia_inspeccion"]
         if "estrategia_hibrido" in data:
             self.estrategia_hibrido = data["estrategia_hibrido"]
+        # Nombres ocultos (configs viejos): mapear a reemplazos visibles.
+        for attr, cat in (("estrategia_exploracion", "exploracion"),
+                          ("estrategia_inspeccion", "inspeccion"),
+                          ("estrategia_hibrido", "hibrido")):
+            nombre = getattr(self, attr)
+            if nombre in MAPEO_ESTRATEGIAS_OCULTAS:
+                modo_nuevo, reemplazo = resolver_estrategia(
+                    self.modo_fase, cat, nombre)
+                self.modo_fase = modo_nuevo
+                setattr(self, attr, reemplazo)
         if "inspeccion_individual" in data:
             self.inspeccion_individual = data["inspeccion_individual"].lower() in ("true", "1", "yes")
         if "inspeccion_padre_antes_hijo" in data:
@@ -308,7 +349,17 @@ class Config:
         # Compatibilidad: si viene "strategy" viejo, mapear al modo correspondiente
         if "strategy" in data:
             old = data["strategy"]
-            if old in ESTRATEGIAS_HIBRIDO:
+            if old in MAPEO_ESTRATEGIAS_OCULTAS:
+                modo_nuevo, cat_nueva, reemplazo = MAPEO_ESTRATEGIAS_OCULTAS[old]
+                print(f"[Estrategia] '{old}' esta oculta; usando '{reemplazo}'.")
+                self.modo_fase = modo_nuevo
+                if modo_nuevo == "hibrido":
+                    self.estrategia_hibrido = reemplazo
+                elif cat_nueva == "inspeccion":
+                    self.estrategia_inspeccion = reemplazo
+                else:
+                    self.estrategia_exploracion = reemplazo
+            elif old in ESTRATEGIAS_HIBRIDO:
                 self.modo_fase = "hibrido"
                 self.estrategia_hibrido = old
             elif old in ESTRATEGIAS_EXPLORACION:
