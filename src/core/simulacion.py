@@ -344,12 +344,30 @@ class Simulacion:
         except Exception:
             return False
 
+    def _voronoi_con_pendientes(self):
+        """True si el planner Voronoi aun tiene POIs pendientes o en curso.
+        El stall de 30 s NO debe declarar la inspeccion terminada en ese
+        caso (tesis: evitaba falsos 'completado' con celdas sin inspeccionar).
+        """
+        p = self.planner_inspeccion
+        if not isinstance(p, InspeccionVoronoi):
+            return False
+        try:
+            return p.puntos_restantes(self.mundo) > 0
+        except Exception:
+            return False
+
+    def _stall_inspeccion(self):
+        """Stall de inspeccion (30 s), salvo Voronoi con POIs pendientes."""
+        return (self.tiempo_simulado - self._ultimo_nuevo_inspeccionado > 30
+                and not self._voronoi_con_pendientes())
+
     def _termino_inspeccion(self, mundo):
         """Fase de inspeccion: termina por inspeccion completa, por agotar los
         puntos de interes (Voronoi) o por estancamiento."""
         if mundo.inspeccion_completa() or self._puntos_voronoi_agotados():
             return True
-        if (self.tiempo_simulado - self._ultimo_nuevo_inspeccionado > 30):
+        if self._stall_inspeccion():
             return True
         return False
 
@@ -374,7 +392,7 @@ class Simulacion:
         if not inspeccion_ok and self.etapa == "inspeccion":
             if self._puntos_voronoi_agotados():
                 inspeccion_ok = True
-            elif (self.tiempo_simulado - self._ultimo_nuevo_inspeccionado > 30):
+            elif self._stall_inspeccion():
                 inspeccion_ok = True
         return exploracion_ok and inspeccion_ok
 
@@ -394,7 +412,7 @@ class Simulacion:
         if not inspeccion_ok:
             if self._puntos_voronoi_agotados():
                 inspeccion_ok = True
-            elif (self.tiempo_simulado - self._ultimo_nuevo_inspeccionado > 30):
+            elif self._stall_inspeccion():
                 inspeccion_ok = True
         return exploracion_ok and inspeccion_ok
 

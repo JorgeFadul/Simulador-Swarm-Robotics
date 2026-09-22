@@ -955,6 +955,11 @@ class InspeccionVoronoi:
     """Voronoi estatico jerarquico + Subasta por generaciones (Fase 3)."""
 
     _K_CANDIDATOS = 48
+    # Si pasan estos segundos simulados sin ninguna inspeccion nueva, se
+    # libera el gate padre-antes-hijo (las tareas bloqueadas por padres
+    # inalcanzables vuelven a ser elegibles). Evita el estancamiento que
+    # antes terminaba la corrida por stall con celdas pendientes (tesis).
+    GATE_LIBERAR_S = 15.0
 
     def __init__(self, cfg, rng=None):
         self.cfg = cfg
@@ -973,6 +978,8 @@ class InspeccionVoronoi:
         self._viz_dat = None
         self._fallos = {}            # (r, c) -> fallos consecutivos
         self._cooldown = {}          # (r, c) -> segundos restantes de aparcado
+        self._t_sin_inspeccion = 0.0  # s sim acumulados sin inspeccion nueva
+        self._gate_liberado = False  # True: gate padre-hijo liberado (latch)
 
     @property
     def viz(self):
@@ -1200,6 +1207,10 @@ class InspeccionVoronoi:
             return fig
 
         cubiertas = set(self._figuras_por_celda.keys())
+        # Anclas para celdas huerfanas: si el descenso punto-en-poligono
+        # falla (o la region se descarto), la celda se cuelga de la raiz
+        # mas cercana en vez de quedar sin POI (tesis: cobertura 100%).
+        anclas = [(r0, r0.centroide_xy) for r0 in self._raices]
         for (rr, cc) in celdas_libres:
             if (rr, cc) in cubiertas:
                 continue
@@ -1208,16 +1219,18 @@ class InspeccionVoronoi:
                 if (rr, cc) in sub:
                     propietario_sitio = s
                     break
-            if propietario_sitio is None:
-                continue
             raiz = sitio_a_root.get(propietario_sitio)
-            if raiz is None:
-                continue
             cx = cc * gs + gs / 2.0
             cy = rr * gs + gs / 2.0
+            if raiz is None:
+                if not anclas:
+                    continue
+                raiz = min(anclas,
+                           key=lambda a: (a[1][0] - cx) ** 2
+                           + (a[1][1] - cy) ** 2)[0]
             padre = _contenedora_mas_profunda(raiz, cx, cy)
             if padre is None:
-                continue
+                padre = raiz
             id_counter[0] += 1
             fig_final = Figura(
                 fig_id=id_counter[0],
@@ -1349,7 +1362,11 @@ class InspeccionVoronoi:
         su figura padre directa ya fue inspeccionada (o si es Gen 0).
         Con `= False`: sin gate de nivel ni padre: toda tarea pendiente (sin
         inspeccionar y sin estar en curso) es elegible y las ramas avanzan sin
-        esperar a su padre."""
+        esperar a su padre.
+        El gate tambien queda liberado cuando `_gate_liberado` es True
+        (estancamiento > GATE_LIBERAR_S sin inspecciones nuevas)."""
+        if self._gate_liberado:
+            return True
         if not self.cfg.inspeccion_padre_antes_hijo:
             return True
         if t["figura"].padre is not None:
@@ -1453,10 +1470,11 @@ class InspeccionVoronoi:
           3 entre 8, etc.; con 0 robots es 1 (sin penalizacion).
         El valor es siempre estrictamente positivo (nunca 0 ni negativo)."""
         alpha = max(0.0, float(self.cfg.inspeccion_peso_distancia))
+        beta = max(1.0, float(getattr(self.cfg, "ga_beta_repulsion", 2.0)))
         tau = max(1e-6, tau_viaje)
         interes_insp = max(1e-6, tarea["coste_acumulado"])
         r_region = self._robots_en_region(mundo, tarea["raiz_id"]) if mundo is not None else 0
-        return interes_insp / ((tarea["nivel"] + 1) * (tau ** alpha) * (2 ** r_region))
+        return interes_insp / ((tarea["nivel"] + 1) * (tau ** alpha) * (beta ** r_region))
 
     def _costo_mercado(self, mundo, rb, tarea):
         """Interes exacto de la tarea para el robot `rb`.
@@ -1518,9 +1536,22 @@ class InspeccionVoronoi:
             self._inicializado = True
 
         # 2) Actualizar resultados de inspeccion y cooldowns
+        n_antes = int(mundo.inspec.sum())
         self._aplicar_resultados(mundo)
         self._registrar_fallos(mundo, gs)
         self._decrementar_cooldowns(dt)
+        # 2b) Liberar el gate padre-hijo ante estancamiento: si no hay
+        # inspecciones nuevas durante GATE_LIBERAR_S, las tareas bloqueadas
+        # por padres inalcanzables vuelven a ser elegibles (latch).
+        if int(mundo.inspec.sum()) > n_antes:
+            self._t_sin_inspeccion = 0.0
+        else:
+            self._t_sin_inspeccion += max(0.0, float(dt))
+            if (not self._gate_liberado
+                    and self._t_sin_inspeccion >= self.GATE_LIBERAR_S):
+                self._gate_liberado = True
+                print("[Voronoi] Gate padre-hijo liberado por estancamiento "
+                      f"({self._t_sin_inspeccion:.0f}s sin inspecciones).")
 
         # 3) Filtrar puntos de interes pendientes (no inspeccionados, no en
         #    curso y elegibles segun `inspeccion_padre_antes_hijo`)
