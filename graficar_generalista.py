@@ -201,7 +201,7 @@ def main():
     plt.close(fig)
 
     # ---- Tiempo mediano a recall 50/80/90% por estrategia ----
-    fig, ax = plt.subplots(figsize=(11, 6))
+    fig, ax = plt.subplots(figsize=(13, 6))
     xs = np.arange(len(configs))
     for j, u in enumerate((50, 80, 90)):
         ms, ls, hs = [], [], []
@@ -216,6 +216,7 @@ def main():
                capsize=3, label=f"recall {u}%")
     ax.set_xticks(xs, [labs[c] for c in configs], fontsize=9,
                   rotation=20, ha="right")
+    ax.set_xlim(-0.9, len(xs) - 0.1)
     ax.set_ylabel("tiempo mediano (s, p25-p75)")
     ax.set_title("Velocidad de hallazgo: tiempo a recall 50/80/90%",
                  fontweight="bold")
@@ -224,10 +225,11 @@ def main():
     ymax = float(np.nanmax([np.nanmedian(v) for vs in t_recall.values()
                             for v in vs.values()]))
     ax.set_ylim(0, 1.05 * ymax)
+    ax.set_yticks(np.arange(0, 1.05 * ymax + 1, 100))
     for ln in ax.lines:  # barras de error visibles aun fuera del eje
         ln.set_clip_on(False)
     fig.tight_layout()
-    fig.subplots_adjust(bottom=0.28)
+    fig.subplots_adjust(bottom=0.28, left=0.13)
     fig.savefig(os.path.join(OUT, "tiempo_a_recall.png"), dpi=120)
     plt.close(fig)
 
