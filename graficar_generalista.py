@@ -354,9 +354,11 @@ def main():
         t = np.mean([float(r["t_sim_s"]) for r in rows])
         e = np.mean([float(r["energia_total_j"]) for r in rows])
         ins = np.mean([float(r["inspeccionadas"]) for r in rows])
+        df = np.mean([float(r["defectuosas"]) for r in rows])
         L = libres_de_mapa(key[3])
         return {"t": t, "e": e, "pinsp": ins / L * 100.0,
-                "e_celda": e / L, "n": len(rows)}
+                "e_celda": e / L, "n": len(rows), "defec": df,
+                "tasa_def": df / t if t > 0 else 0.0}
 
     # ---- 3. Ley de escala: t_fin vs N^2/R (log-log + pendiente) ----
     fig = plt.figure(figsize=(10, 5.5))
@@ -582,6 +584,54 @@ def main():
     fig.tight_layout()
     fig.savefig(os.path.join(OUT, "rendimientos_por_mapa.png"), dpi=120)
     plt.close(fig)
+
+    # ---- Tasa de defectos/s vs robots por mapa (busca optimo local) ----
+    mapas_td = sorted({k[3] for k in res})
+    robots_td = sorted({k[4] for k in res})
+    fig, axes = plt.subplots(3, 2, figsize=(12, 13), sharey=False)
+    axes = axes.flat
+    optimos = []
+    for i, m in enumerate(mapas_td + ["todos"]):
+        ax = axes[i]
+        for c in configs:
+            xs, ys = [], []
+            for rb in robots_td:
+                if m == "todos":
+                    vals = [finales_grupo((c[0], c[1], c[2], mm, rb))["tasa_def"]
+                            for mm in mapas_td
+                            if finales_grupo((c[0], c[1], c[2], mm, rb))]
+                    if vals:
+                        xs.append(rb)
+                        ys.append(float(np.mean(vals)))
+                else:
+                    f = finales_grupo((c[0], c[1], c[2], m, rb))
+                    if f:
+                        xs.append(rb)
+                        ys.append(f["tasa_def"])
+            if xs:
+                ax.plot(xs, ys, "o-", label=labs[c], color=colores[c])
+                j = int(np.argmax(ys))
+                ax.plot(xs[j], ys[j], "*", ms=12, color=colores[c])
+                optimos.append((labs[c], m, xs[j], round(ys[j], 4)))
+        ax.set_title(f"mapa {m}x{m}" if m != "todos" else "promedio mapas")
+        ax.set_xlabel("robots")
+        ax.grid(True, alpha=0.3)
+        ax.text(0.5, -0.24, f"({chr(97 + i)})", transform=ax.transAxes,
+                ha="center", va="top", fontsize=12, fontweight="bold")
+    axes[0].set_ylabel("defectos / s")
+    axes[0].legend(fontsize=7)
+    axes[5].legend(fontsize=7)
+    fig.suptitle("Tasa de hallazgo de defectos vs dotacion (* = optimo)",
+                 fontweight="bold")
+    fig.tight_layout()
+    fig.savefig(os.path.join(OUT, "tasa_defectos_vs_robots.png"), dpi=120)
+    plt.close(fig)
+
+    with open(os.path.join(dd, "optimo_robots.csv"), "w",
+              newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["estrategia", "mapa", "robots_optimo", "tasa_def_s"])
+        w.writerows(optimos)
 
     # ---- datos derivados ----
     with open(os.path.join(dd, "pendientes_escala.csv"), "w",

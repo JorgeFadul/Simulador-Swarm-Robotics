@@ -76,6 +76,11 @@ def metricas_run(r):
     k = np.ones(21) / 21.0
     out["vel_pct"] = np.convolve(vel_pct, k, mode="same")
     out["vel_cells"] = np.convolve(vel_cells, k, mode="same")
+    d_def = np.diff(r["defec"])
+    vel_def = np.concatenate([[0.0], d_def / dt])
+    out["vel_def"] = np.convolve(vel_def, k, mode="same")
+    insp_nn = np.maximum(r["insp"], 1e-9)
+    out["p_def"] = r["defec"] / insp_nn * 100.0  # %inspeccionadas con defecto
     e = np.maximum(r["e"], 1e-9)
     out["pct_por_J"] = out["p_insp"] / e
     out["cells_por_J"] = r["insp"] / e
@@ -98,6 +103,8 @@ def promediar_grupo(runs):
                "p_visit": np.mean([metricas_run(r)["p_visit"][-1] for r in runs]),
                "p_insp": np.mean([metricas_run(r)["p_insp"][-1] for r in runs]),
                "vel_pct_max": np.mean([metricas_run(r)["vel_pct"].max() for r in runs]),
+               "vel_def_max": np.mean([metricas_run(r)["vel_def"].max() for r in runs]),
+               "p_def": np.mean([metricas_run(r)["p_def"][-1] for r in runs]),
                "pct_J": np.mean([metricas_run(r)["pct_por_J"][-1] for r in runs]),
                "cells_J": np.mean([metricas_run(r)["cells_por_J"][-1] for r in runs]),
                "t_fin": np.mean([r["t"][-1] for r in runs]),
@@ -136,10 +143,10 @@ def main():
     for k, v in grupos.items():
         prom[k] = promediar_grupo(v)
 
-    METS = [("p_vistas", "% celdas vistas"),
-            ("p_visit", "% celdas visitadas"),
+    METS = [("p_visit", "% celdas visitadas"),
             ("p_insp", "% celdas inspeccionadas"),
-            ("vel_pct", "velocidad insp (%/s)"),
+            ("p_def", "% inspeccionadas con defecto"),
+            ("vel_def", "velocidad defectos (celdas/s)"),
             ("pct_por_J", "%insp / energia (pct/J)"),
             ("e_abs", "energia total (J)")]
     YLAB = dict(METS)
@@ -178,9 +185,9 @@ def main():
             plt.close(fig)
 
     # 02/03 resumenes: metrica final vs mapa (promedio robots) y vs robots (promedio mapas)
-    FINALES = [("p_vistas", "% vistas final"), ("p_visit", "% visitadas final"),
+    FINALES = [("p_def", "% con defecto final"), ("p_visit", "% visitadas final"),
                ("p_insp", "% inspeccionadas final"),
-               ("vel_pct_max", "vel. max (%/s)"),
+               ("vel_def_max", "vel. defectos max (celdas/s)"),
                ("pct_J", "%insp/J final"), ("cells_J", "celdas/J final"),
                ("t_fin", "t fin (s)")]
     for eje, nombre, carpeta in (("mapa", "robots", "02_resumen_mapa"),
@@ -302,26 +309,32 @@ def main():
     with open(os.path.join(dd, "resumen_final.csv"), "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["grupo", "exp", "estrategia", "etiqueta", "mapa", "robots",
-                    "n", "p_vistas", "p_visit", "p_insp", "vel_max_pct_s",
+                    "n", "p_vistas", "p_visit", "p_insp", "p_def",
+                    "vel_max_pct_s", "vel_def_max_cs",
                     "pct_por_J", "cells_por_J", "t_fin_s", "e_tot_J"])
         for k in sorted(prom):
             tg, cv, fin, n = prom[k]
             w.writerow([k[0], k[1], k[2], etiqueta(k[0], k[1], k[2]), k[3], k[4], n,
                         round(fin["p_vistas"], 2), round(fin["p_visit"], 2),
-                        round(fin["p_insp"], 2), round(fin["vel_pct_max"], 4),
+                        round(fin["p_insp"], 2), round(fin["p_def"], 2),
+                        round(fin["vel_pct_max"], 4),
+                        round(fin["vel_def_max"], 4),
                         round(fin["pct_J"], 5), round(fin["cells_J"], 5),
                         round(fin["t_fin"], 1), round(fin["e_tot"], 2)])
     with open(os.path.join(dd, "promedios.csv"), "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["etiqueta", "grupo", "p_vistas_m", "p_visit_m", "p_insp_m",
-                    "vel_max_m", "pctJ_m", "cellsJ_m", "t_fin_m", "e_tot_m"])
+                    "p_def_m", "vel_max_m", "vel_def_max_m",
+                    "pctJ_m", "cellsJ_m", "t_fin_m", "e_tot_m"])
         for (g, e, s) in configs:
             sel = [prom[k][2] for k in prom if k[:3] == (g, e, s)]
             w.writerow([etiqueta(g, e, s), g,
                         round(float(np.mean([v["p_vistas"] for v in sel])), 2),
                         round(float(np.mean([v["p_visit"] for v in sel])), 2),
                         round(float(np.mean([v["p_insp"] for v in sel])), 2),
+                        round(float(np.mean([v["p_def"] for v in sel])), 2),
                         round(float(np.mean([v["vel_pct_max"] for v in sel])), 4),
+                        round(float(np.mean([v["vel_def_max"] for v in sel])), 4),
                         round(float(np.mean([v["pct_J"] for v in sel])), 5),
                         round(float(np.mean([v["cells_J"] for v in sel])), 5),
                         round(float(np.mean([v["t_fin"] for v in sel])), 1),
