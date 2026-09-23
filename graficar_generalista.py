@@ -545,6 +545,44 @@ def main():
                 dpi=120)
     plt.close(fig)
 
+    # ---- Rendimientos por mapa: 2 cols x 3 filas, (f) = promedio ----
+    pasos = [(5, 10), (10, 15), (15, 20), (20, 25), (25, 30)]
+    mapas_rd = sorted({k[3] for k in res})
+    fig, axes = plt.subplots(3, 2, figsize=(12, 13), sharey=True)
+    axes = axes.flat
+    for i, m in enumerate(mapas_rd + ["prom"]):
+        ax = axes[i]
+        for c in configs:
+            xs, ys = [], []
+            for a, b in pasos:
+                if m == "prom":
+                    maps = mapas_rd
+                else:
+                    maps = [m]
+                gains = []
+                for mm in maps:
+                    fa = finales_grupo((c[0], c[1], c[2], mm, a))
+                    fb = finales_grupo((c[0], c[1], c[2], mm, b))
+                    if fa and fb and fa["t"] > 0:
+                        gains.append(100.0 * (fa["t"] - fb["t"]) / fa["t"])
+                if gains:
+                    xs.append(f"{a}->{b}")
+                    ys.append(float(np.mean(gains)))
+            ax.plot(xs, ys, "o-", label=labs[c], color=colores[c])
+        ax.axhline(0, color="k", lw=0.8)
+        ax.set_title(f"mapa {m}x{m}" if m != "prom" else "promedio mapas")
+        ax.grid(True, alpha=0.3)
+        ax.text(0.5, -0.24, f"({chr(97 + i)})", transform=ax.transAxes,
+                ha="center", va="top", fontsize=12, fontweight="bold")
+    axes[0].set_ylabel("reduccion media de t_fin (%)")
+    axes[0].legend(fontsize=7)
+    axes[5].legend(fontsize=7)
+    fig.suptitle("Rendimientos decrecientes por tamano de mapa",
+                 fontweight="bold")
+    fig.tight_layout()
+    fig.savefig(os.path.join(OUT, "rendimientos_por_mapa.png"), dpi=120)
+    plt.close(fig)
+
     # ---- datos derivados ----
     with open(os.path.join(dd, "pendientes_escala.csv"), "w",
               newline="", encoding="utf-8") as f:
