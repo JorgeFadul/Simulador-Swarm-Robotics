@@ -292,8 +292,9 @@ def main():
 
     # ---- Generalista facetada: 5 paneles (a)-(e), uno por mapa ----
     mapas_all = sorted({k[3] for k in rec_grupo})
-    fig, axes = plt.subplots(1, len(mapas_all), figsize=(5 * len(mapas_all), 5),
+    fig, axes = plt.subplots(3, 2, figsize=(12, 13),
                              sharey=True)
+    axes = axes.flat
     for i, (ax, m) in enumerate(zip(axes, mapas_all)):
         for c in configs:
             curvas = [rec_grupo[k] for k in sorted(rec_grupo)
@@ -313,6 +314,7 @@ def main():
                 ha="center", va="top", fontsize=12, fontweight="bold")
     axes[0].set_ylabel("% defectos (recall)")
     axes[0].legend(fontsize=7)
+    axes[5].axis("off")
     fig.suptitle("Recall de defectos vs tiempo por mapa (todas)",
                  fontweight="bold")
     fig.tight_layout()
@@ -425,7 +427,7 @@ def main():
                 vals["t"].append(f["t"])
                 vals["e_celda"].append(f["e_celda"])
         agg[c] = vals
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    fig, axes = plt.subplots(3, 1, figsize=(11, 13))
     for ax, (fk, xl) in zip(axes, [("pinsp", "% insp media"),
                                    ("t", "t_fin medio (s)"),
                                    ("e_celda", "J/celda medio")]):
@@ -475,10 +477,10 @@ def main():
         mapas = sorted({k[3] for k in res})
         robots = sorted({k[4] for k in res})
         ncf = len(configs)
-        ncols = 4 if ncf > 4 else ncf
+        ncols = 2
         nrows = int(np.ceil(ncf / ncols))
         fig, axes = plt.subplots(nrows, ncols,
-                                 figsize=(4.2 * ncols, 3.6 * nrows))
+                                 figsize=(4.6 * ncols, 3.8 * nrows))
         axes = np.atleast_2d(axes)
         todo = [finales_grupo(k)[fk] for k in res if finales_grupo(k)]
         vmax = float(np.max(todo)) if todo else 1.0
