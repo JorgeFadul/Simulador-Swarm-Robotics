@@ -22,6 +22,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from graficar_tesis_final import cargar_series, etiqueta, metricas_run, slug
+from gt_defectos import gt_cache
 
 SERIES = "resultados_tesis_final/series"
 RESUMENES = "resultados_tesis_final/resumenes.csv"
@@ -82,43 +83,6 @@ def _por_grupo(runs):
     return g
 
 
-def gt_cache(runs, dd):
-    """GT de celdas defectuosas por corrida (reproducible desde la semilla).
-    Cache en datos/defectos_gt.csv: id -> gt_total."""
-    from src.core.config import Config
-    from src.core.mundo import Mundo
-    ruta = os.path.join(dd, "defectos_gt.csv")
-    gt = {}
-    if os.path.exists(ruta):
-        with open(ruta, encoding="utf-8") as f:
-            for row in csv.DictReader(f):
-                gt[row["id"]] = int(row["gt_total"])
-    faltan = 0
-    for r in runs:
-        if r["key"] in gt:
-            continue
-        n = r["mapa"]
-        cfg = Config()
-        cfg.grid_size = 20
-        cfg.map_width = n * 20
-        cfg.map_height = n * 20
-        cfg.cols = n
-        cfg.rows = n
-        cfg.walls = []
-        # Misma cadena que el barrido: seed md5 + Mundo(cfg, default_rng(seed))
-        m = Mundo(cfg, rng=np.random.default_rng(r["seed"]))
-        gt[r["key"]] = int(m._defectuosas_gt)
-        faltan += 1
-    if faltan:
-        with open(ruta, "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(["id", "gt_total"])
-            for k in sorted(gt):
-                w.writerow([k, gt[k]])
-    print(f"GT defectos: {len(gt)} corridas ({faltan} calculados)")
-    return gt
-
-
 def main():
     os.makedirs(OUT, exist_ok=True)
     for p in os.listdir(OUT):
@@ -164,7 +128,7 @@ def main():
         fig.savefig(os.path.join(OUT, fname + ".png"), dpi=120)
         plt.close(fig)
 
-    gt = gt_cache(runs, dd)
+    gt = gt_cache(runs, "resultados_tesis_final/datos/defectos_gt.csv")
 
     # ---- Recall de defectos vs tau (mediana por estrategia) ----
     fig = plt.figure(figsize=(10, 5.5))

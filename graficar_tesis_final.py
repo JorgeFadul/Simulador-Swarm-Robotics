@@ -80,7 +80,9 @@ def metricas_run(r):
     vel_def = np.concatenate([[0.0], d_def / dt])
     out["vel_def"] = np.convolve(vel_def, k, mode="same")
     insp_nn = np.maximum(r["insp"], 1e-9)
-    out["p_def"] = r["defec"] / insp_nn * 100.0  # %inspeccionadas con defecto
+    out["p_def_insp"] = r["defec"] / insp_nn * 100.0  # %insp con defecto
+    gt = max(1, int(r.get("gt", 0)))
+    out["p_def"] = r["defec"] / gt * 100.0  # %defectos encontrados (recall)
     e = np.maximum(r["e"], 1e-9)
     out["pct_por_J"] = out["p_insp"] / e
     out["cells_por_J"] = r["insp"] / e
@@ -134,6 +136,11 @@ def main():
     print(f"Corridas cargadas: {len(runs)}")
     if not runs:
         return
+    from gt_defectos import gt_cache
+    gt = gt_cache(runs,
+                  "resultados_tesis_final/datos/defectos_gt.csv")
+    for r in runs:
+        r["gt"] = gt[r["key"]]
     # agrupar por (grupo,exp,estrategia,mapa,robots)
     grupos = {}
     for r in runs:
@@ -145,7 +152,7 @@ def main():
 
     METS = [("p_visit", "% celdas visitadas"),
             ("p_insp", "% celdas inspeccionadas"),
-            ("p_def", "% inspeccionadas con defecto"),
+            ("p_def", "% defectos encontrados"),
             ("vel_def", "velocidad defectos (celdas/s)"),
             ("pct_por_J", "%insp / energia (pct/J)"),
             ("e_abs", "energia total (J)")]
@@ -185,7 +192,8 @@ def main():
             plt.close(fig)
 
     # 02/03 resumenes: metrica final vs mapa (promedio robots) y vs robots (promedio mapas)
-    FINALES = [("p_def", "% con defecto final"), ("p_visit", "% visitadas final"),
+    FINALES = [("p_def", "% defectos encontrados final"),
+               ("p_visit", "% visitadas final"),
                ("p_insp", "% inspeccionadas final"),
                ("vel_def_max", "vel. defectos max (celdas/s)"),
                ("pct_J", "%insp/J final"), ("cells_J", "celdas/J final"),
