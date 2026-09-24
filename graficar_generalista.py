@@ -322,7 +322,8 @@ def main():
         L = libres_de_mapa(key[3])
         return {"t": t, "e": e, "pinsp": ins / L * 100.0,
                 "e_celda": e / L, "n": len(rows), "defec": df,
-                "tasa_def": df / t if t > 0 else 0.0}
+                "tasa_def": df / t if t > 0 else 0.0,
+                "e_por_def": e / df if df > 0 else float("nan")}
 
     # ---- 3. Ley de escala: t_fin vs N^2/R (log-log + pendiente) ----
     fig = plt.figure(figsize=(10, 5.5))
@@ -416,19 +417,19 @@ def main():
     fig.savefig(os.path.join(OUT, "ranking_global.png"), dpi=120)
     plt.close(fig)
 
-    # ---- 6. Frontera de Pareto tiempo vs energia ----
+    # ---- 6. Frontera de Pareto: tiempo vs J por celda defectuosa ----
     fig = plt.figure(figsize=(9, 6))
     for c in configs:
         tm = float(np.median([finales_grupo(k)["t"] for k in res
                               if k[:3] == c and finales_grupo(k)]))
-        em = float(np.median([finales_grupo(k)["e_celda"] for k in res
-                              if k[:3] == c and finales_grupo(k)]))
+        em = float(np.nanmedian([finales_grupo(k)["e_por_def"] for k in res
+                                 if k[:3] == c and finales_grupo(k)]))
         plt.scatter([tm], [em], s=120, color=colores[c], label=labs[c])
         plt.annotate(labs[c], (tm, em), fontsize=8,
                      xytext=(6, 6), textcoords="offset points")
     plt.xlabel("t_fin mediano (s)")
-    plt.ylabel("J/celda mediano")
-    plt.title("Frontera de Pareto: tiempo vs energia por estrategia",
+    plt.ylabel("J por celda defectuosa encontrada")
+    plt.title("Frontera de Pareto: tiempo vs energia por defecto",
               fontweight="bold")
     plt.grid(True, alpha=0.3)
     fig.tight_layout()
