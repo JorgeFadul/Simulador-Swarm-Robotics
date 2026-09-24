@@ -14,6 +14,7 @@ Uso: python graficar_generalista.py
 """
 
 import csv
+import math
 import os
 
 import matplotlib
@@ -52,7 +53,7 @@ def curva_colapsada(grupo_runs, clave_metrica, norm_e=False):
         for r in rs:
             met = metricas_run(r)[clave_metrica]
             if norm_e:
-                met = met / max(1, r["libres"])
+                met = met / max(1, int(r.get("gt", r["libres"])))
             tau = r["t"] * rb / (n * n)
             curvas.append((tau, met))
             tg_max = max(tg_max, tau[-1])
@@ -106,7 +107,7 @@ def main():
     for met, titulo, unidad, fname in (
             ("p_insp", "% celdas inspeccionadas", "% insp",
              "colapso_insp_vs_tau"),
-            ("e_abs", "Energia por celda libre", "J/celda",
+            ("e_abs", "J por defecto", "J/defecto",
              "colapso_energia_vs_tau")):
         norm = (met == "e_abs")
         fig = plt.figure(figsize=(10, 5.5))
@@ -129,6 +130,8 @@ def main():
         plt.close(fig)
 
     gt = gt_cache(runs, "resultados_tesis_final/datos/defectos_gt.csv")
+    for r in runs:
+        r["gt"] = gt[r["key"]]
 
     # ---- Recall de defectos vs tau (mediana por estrategia) ----
     fig = plt.figure(figsize=(10, 5.5))
@@ -357,7 +360,7 @@ def main():
     fig.savefig(os.path.join(OUT, "ley_escala_tiempo.png"), dpi=120)
     plt.close(fig)
 
-    # ---- 4. Eficiencia: J/celda vs densidad R/N^2 ----
+    # ---- 4. Eficiencia: J/defecto vs densidad R/N^2 ----
     fig = plt.figure(figsize=(10, 5.5))
     for c in configs:
         xs, ys = [], []
@@ -365,14 +368,14 @@ def main():
             if key[:3] != c:
                 continue
             f = finales_grupo(key)
-            if f:
+            if f and not math.isnan(f["e_por_def"]):
                 xs.append(key[4] / key[3] ** 2)
-                ys.append(f["e_celda"])
+                ys.append(f["e_por_def"])
         o = np.argsort(xs)
         plt.plot(np.array(xs)[o], np.array(ys)[o], "o-",
                  label=labs[c], color=colores[c])
     plt.xlabel("densidad R / N^2 (robots por celda)")
-    plt.ylabel("J por celda libre")
+    plt.ylabel("J por defecto encontrado")
     plt.title("Eficiencia energetica vs densidad de robots",
               fontweight="bold")
     plt.legend(fontsize=8)
@@ -384,20 +387,20 @@ def main():
     # ---- 5. Ranking global con dispersion ----
     agg = {}
     for c in configs:
-        vals = {"pinsp": [], "t": [], "e_celda": []}
+        vals = {"pinsp": [], "t": [], "e_por_def": []}
         for key in res:
             if key[:3] != c:
                 continue
             f = finales_grupo(key)
-            if f:
+            if f and not math.isnan(f["e_por_def"]):
                 vals["pinsp"].append(f["pinsp"])
                 vals["t"].append(f["t"])
-                vals["e_celda"].append(f["e_celda"])
+                vals["e_por_def"].append(f["e_por_def"])
         agg[c] = vals
     fig, axes = plt.subplots(3, 1, figsize=(11, 13))
     for ax, (fk, xl) in zip(axes, [("pinsp", "% insp media"),
                                    ("t", "t_fin medio (s)"),
-                                   ("e_celda", "J/celda medio")]):
+                                   ("e_por_def", "J/defecto medio")]):
         xs = [labs[c] for c in configs]
         ms = [float(np.mean(agg[c][fk])) for c in configs]
         es = [float(np.std(agg[c][fk])) for c in configs]

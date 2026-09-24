@@ -32,7 +32,7 @@ TAU_N = 200  # puntos de la grilla temporal comun
 def etiqueta(grupo, exp, estr):
     if grupo == "dos_etapas":
         return f"{exp}+{estr}"
-    return estr
+    return {"Cerebro Mosca (Dopamina)": "Bio-RL"}.get(estr, estr)
 
 
 def cargar_series(d):
@@ -83,6 +83,7 @@ def metricas_run(r):
     out["p_def_insp"] = r["defec"] / insp_nn * 100.0  # %insp con defecto
     gt = max(1, int(r.get("gt", 0)))
     out["p_def"] = r["defec"] / gt * 100.0  # %defectos encontrados (recall)
+    out["j_por_def"] = r["e"].astype(float) / gt  # J por defecto (GT)
     e = np.maximum(r["e"], 1e-9)
     out["pct_por_J"] = out["p_insp"] / e
     out["cells_por_J"] = r["insp"] / e
@@ -107,6 +108,8 @@ def promediar_grupo(runs):
                "vel_pct_max": np.mean([metricas_run(r)["vel_pct"].max() for r in runs]),
                "vel_def_max": np.mean([metricas_run(r)["vel_def"].max() for r in runs]),
                "p_def": np.mean([metricas_run(r)["p_def"][-1] for r in runs]),
+               "j_def": np.mean([r["e"][-1] / max(1, r["defec"][-1])
+                                 for r in runs]),
                "pct_J": np.mean([metricas_run(r)["pct_por_J"][-1] for r in runs]),
                "cells_J": np.mean([metricas_run(r)["cells_por_J"][-1] for r in runs]),
                "t_fin": np.mean([r["t"][-1] for r in runs]),
@@ -154,7 +157,7 @@ def main():
             ("p_insp", "% celdas inspeccionadas"),
             ("p_def", "% defectos encontrados"),
             ("vel_def", "velocidad defectos (celdas/s)"),
-            ("pct_por_J", "%insp / energia (pct/J)"),
+            ("j_por_def", "J por defecto"),
             ("e_abs", "energia total (J)")]
     YLAB = dict(METS)
 
@@ -196,7 +199,7 @@ def main():
                ("p_visit", "% visitadas final"),
                ("p_insp", "% inspeccionadas final"),
                ("vel_def_max", "vel. defectos max (celdas/s)"),
-               ("pct_J", "%insp/J final"), ("cells_J", "celdas/J final"),
+               ("j_def", "J/defecto final"), ("cells_J", "celdas/J final"),
                ("t_fin", "t fin (s)")]
     for eje, nombre, carpeta in (("mapa", "robots", "02_resumen_mapa"),
                                  ("robots", "mapa", "03_resumen_robots")):
@@ -319,7 +322,7 @@ def main():
         w.writerow(["grupo", "exp", "estrategia", "etiqueta", "mapa", "robots",
                     "n", "p_vistas", "p_visit", "p_insp", "p_def",
                     "vel_max_pct_s", "vel_def_max_cs",
-                    "pct_por_J", "cells_por_J", "t_fin_s", "e_tot_J"])
+                    "j_por_def_J", "cells_por_J", "t_fin_s", "e_tot_J"])
         for k in sorted(prom):
             tg, cv, fin, n = prom[k]
             w.writerow([k[0], k[1], k[2], etiqueta(k[0], k[1], k[2]), k[3], k[4], n,
@@ -327,13 +330,13 @@ def main():
                         round(fin["p_insp"], 2), round(fin["p_def"], 2),
                         round(fin["vel_pct_max"], 4),
                         round(fin["vel_def_max"], 4),
-                        round(fin["pct_J"], 5), round(fin["cells_J"], 5),
+                        round(fin["j_def"], 4), round(fin["cells_J"], 5),
                         round(fin["t_fin"], 1), round(fin["e_tot"], 2)])
     with open(os.path.join(dd, "promedios.csv"), "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["etiqueta", "grupo", "p_vistas_m", "p_visit_m", "p_insp_m",
                     "p_def_m", "vel_max_m", "vel_def_max_m",
-                    "pctJ_m", "cellsJ_m", "t_fin_m", "e_tot_m"])
+                    "jdef_m", "cellsJ_m", "t_fin_m", "e_tot_m"])
         for (g, e, s) in configs:
             sel = [prom[k][2] for k in prom if k[:3] == (g, e, s)]
             w.writerow([etiqueta(g, e, s), g,
@@ -343,7 +346,7 @@ def main():
                         round(float(np.mean([v["p_def"] for v in sel])), 2),
                         round(float(np.mean([v["vel_pct_max"] for v in sel])), 4),
                         round(float(np.mean([v["vel_def_max"] for v in sel])), 4),
-                        round(float(np.mean([v["pct_J"] for v in sel])), 5),
+                        round(float(np.mean([v["j_def"] for v in sel])), 4),
                         round(float(np.mean([v["cells_J"] for v in sel])), 5),
                         round(float(np.mean([v["t_fin"] for v in sel])), 1),
                         round(float(np.mean([v["e_tot"] for v in sel])), 2)])
