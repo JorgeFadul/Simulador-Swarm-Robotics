@@ -176,17 +176,68 @@ def _costo_mas_cercano(mundo, x, y):
     return costo if costo is not None else 0.0
 
 
-def _costo_frontera(robot, celdas, gs):
+def _w_cost(cfg):
+    """Penalizacion por distancia A*/euclidea (gen GA g0, default 0.02)."""
+    return float(getattr(cfg, "sample_cost_weight", 0.02))
+
+
+def _w_info(cfg):
+    """Ganancia de informacion por celdas reveladas (gen GA g1, default 1.0)."""
+    return float(getattr(cfg, "ga_w_info", 1.0))
+
+
+def _w_defect(cfg):
+    """Atractivo de celdas contiguas a baldosas defectuosas (gen GA g2)."""
+    return float(getattr(cfg, "ga_w_defect", 3.0))
+
+
+def _bonus_defecto(mundo, x, y):
+    """Numero de celdas 4-vecinas a (x,y) con resultado defectuoso conocido.
+
+    Usa mundo.resultado (1 = defectuosa). Solo cuenta lo ya inspeccionado,
+    por lo que es 0 al inicio de la corrida y crece con la inspeccion.
+    """
+    try:
+        gs = mundo.cfg.grid_size
+        c = int(x // gs)
+        r = int(y // gs)
+        res = getattr(mundo, "resultado", None)
+        if res is None:
+            return 0
+        bonus = 0
+        for nr, nc in ((r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)):
+            if 0 <= nr < mundo.rows and 0 <= nc < mundo.cols:
+                if int(res[nr, nc]) == 1:
+                    bonus += 1
+        return bonus
+    except Exception:
+        return 0
+
+
+def _score_exploracion(cfg, mundo, x, y, gain, costo):
+    """Score GA: w_info * gain - w_cost * costo + w_defect * bonus_defecto."""
+    return (_w_info(cfg) * gain - _w_cost(cfg) * costo
+            + _w_defect(cfg) * _bonus_defecto(mundo, x, y))
+
+
+def _costo_frontera(robot, celdas, gs, cfg=None):
     """Costo de asignar una frontera (entidad de `celdas`) a un robot.
 
     Formula: cost = distancia_al_centroide / (num_celdas + 1).
     Mas celdas -> menor costo; mas distancia -> mayor costo. El robot debe
-    ir a la frontera de MENOR costo (fronteras grandes y cercanas primero)."""
+    ir a la frontera de MENOR costo (fronteras grandes y cercanas primero).
+
+    Con cfg GA, el termino de distancia se pondera por w_cost/0.02 para que
+    el gen g0 module la subasta sin cambiar el comportamiento por defecto.
+    """
     n = len(celdas)
     gx = sum(c for _, c in celdas) / n * gs + gs / 2
     gy = sum(r for r, _ in celdas) / n * gs + gs / 2
     dist = math.hypot(robot.x - gx, robot.y - gy)
-    return dist / (n + 1)
+    base = dist / (n + 1)
+    if cfg is not None:
+        base *= _w_cost(cfg) / 0.02
+    return base
 
 
 def _muestrear_en_zona(mundo, cx0, cy0, radio, rng):
@@ -368,7 +419,7 @@ class VoronoiExploracion:
                 y = r_i * gs + gs / 2
                 gain = _ganancia(mundo, x, y, radio)
                 costo = math.hypot(reg["sitio"][0] - x, reg["sitio"][1] - y)
-                score = gain - self.cfg.sample_cost_weight * costo
+                score = _score_exploracion(self.cfg, mundo, x, y, gain, costo)
                 if mejor is None or score > mejor["score"]:
                     mejor = {"x": x, "y": y, "score": score,
                              "region": reg["celdas"], "robot": reg["robot"]}
@@ -441,7 +492,7 @@ class SampleBased:
             x, y = punto
             gain = _ganancia(mundo, x, y, radio)
             costo = _costo_mas_cercano(mundo, x, y)
-            score = gain - self.cfg.sample_cost_weight * costo
+            score = _score_exploracion(self.cfg, mundo, x, y, gain, costo)
             candidatos.append((x, y, score))
         candidatos.sort(key=lambda t: -t[2])
         return candidatos[:self.cfg.sample_targets]
@@ -481,7 +532,7 @@ class Hybrid:
             # se decide luego en la asignacion dinamica). Menor costo = mejor.
             costo = None
             for r in mundo.robots:
-                cc = _costo_frontera(r, celdas, gs)
+                cc = _costo_frontera(r, celdas, gs, mundo.cfg)
                 if costo is None or cc < costo:
                     costo = cc
             if costo is None:
@@ -658,7 +709,7 @@ class ExplorationPlanner:
         pares = []
         for k, r in enumerate(robots):
             for t in self._regiones:
-                pares.append((_costo_frontera(r, t["celdas"], gs), k, t))
+                pares.append((_costo_frontera(r, t["celdas"], gs, mundo.cfg), k, t))
         pares.sort(key=lambda p: (p[0], p[1]))
 
         reservadas = set()   # fronteras ya tomadas (una sola vez)
@@ -684,7 +735,7 @@ class ExplorationPlanner:
             # solo cambia si la nueva es significativamente mas barata.
             if (previo is not None and not misma_frontera
                     and not r.necesita_objetivo):
-                c_actual = _costo_frontera(r, previo["celdas"], gs)
+                c_actual = _costo_frontera(r, previo["celdas"], gs, mundo.cfg)
                 if costo >= c_actual * fracciona:
                     continue  # no mejora lo suficiente, conserva su objetivo
             # El par vino en orden ascendente de costo: es la frontera de menor
@@ -706,11 +757,11 @@ class ExplorationPlanner:
             r = robots[k]
             if disponibles:
                 mejor_t = min(disponibles,
-                              key=lambda t: _costo_frontera(r, t["celdas"], gs))
+                              key=lambda t: _costo_frontera(r, t["celdas"], gs, mundo.cfg))
                 disponibles.remove(mejor_t)
             else:
                 mejor_t = min(self._regiones,
-                              key=lambda t: _costo_frontera(r, t["celdas"], gs))
+                              key=lambda t: _costo_frontera(r, t["celdas"], gs, mundo.cfg))
             asignados[k] = mejor_t
             tomado_esta.add(k)
             reservadas.add(id(mejor_t))

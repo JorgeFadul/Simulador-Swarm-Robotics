@@ -76,6 +76,25 @@ dirigido_umbral_giro_deg: 5.0
 # no es accesible por obstaculos frontales, se pivota en el centro (v=0).
 dirigido_giro_kp: 6.0
 dirigido_pivote_umbral_deg: 35.0
+# Histeresis anti-oscilacion en giros traseros (~180): se bloquea el sentido
+# de giro al entrar en la zona ambigua y se libera al alinear (< salida).
+giro_histeresis_entrada_deg: 160.0
+giro_histeresis_salida_deg: 30.0
+giro_banda_180_deg: 20.0
+giro_sin_avance_timeout_s: 0.4
+giro_sin_avance_dist_px: 2.0
+giro_kick_deg: 90.0
+# Random Walk: el rumbo de evasion se congela (latch) y solo se re-emite si
+# cambia mas de latch_deg; si el giro latched no converge en timeout, sale
+# por el flanco despejado.
+rw_evasion_latch_deg: 25.0
+rw_giro_timeout_s: 1.0
+# Marcha atras (modo dirigido): entra con la meta muy atras y cerca con
+# trasera libre; sale al alinearse, alejarse o bloquearse atras.
+marcha_atras_diff_entrada_deg: 150.0
+marcha_atras_diff_salida_deg: 120.0
+marcha_atras_dist_mult: 4.0
+marcha_atras_factor_vel: 0.5
 
 # --- Modelo de energia (bateria) ---
 masa_kg: 0.35

@@ -112,9 +112,15 @@ def _segmento_libre_sin_cache(mundo, ax, ay, bx, by, radio):
     return True
 
 
-def _suavizar(mundo, waypoints, radio):
+def _suavizar(mundo, waypoints, radio, angulo_actual=None, x_actual=None,
+                y_actual=None):
     """Elimina waypoints intermedios cuando el tramo recto entre dos waypoints
-    lejanos queda libre: produce rutas directas (menos giros y esquinas)."""
+    lejanos queda libre: produce rutas directas (menos giros y esquinas).
+
+    Guardia anti-180: si el salto directo exige un giro trasero (>150 grados
+    respecto a `angulo_actual`) y el origen esta pegado a una pared (disco
+    ampliado a 2 radios no libre), se conserva el waypoint intermedio para
+    evitar mandar al robot contra la pared de espaldas."""
     if len(waypoints) <= 2:
         return waypoints
     suave = [waypoints[0]]
@@ -126,6 +132,15 @@ def _suavizar(mundo, waypoints, radio):
                                                 waypoints[j][0], waypoints[j][1],
                                                 radio):
             j -= 1
+        if (angulo_actual is not None and x_actual is not None
+                and y_actual is not None and j > i + 1):
+            rumbo = math.atan2(waypoints[j][1] - y_actual,
+                               waypoints[j][0] - x_actual)
+            diff = math.atan2(math.sin(rumbo - angulo_actual),
+                              math.cos(rumbo - angulo_actual))
+            if abs(abs(diff) - math.pi) < math.radians(30.0):
+                if not _disco_libre(mundo, x_actual, y_actual, radio * 2.0):
+                    j = i + 1
         suave.append(waypoints[j])
         i = j
     return suave
@@ -170,7 +185,7 @@ def _a_estrella(mundo, r0, c0, r1, c1):
     return None
 
 
-def encontrar_ruta(mundo, x1, y1, x2, y2):
+def encontrar_ruta(mundo, x1, y1, x2, y2, angulo_actual=None):
     """Devuelve lista de waypoints (px) directos o lista vacia si no hay ruta.
 
     Las aristas del A* exigen despeje fisico del disco del robot (consciente
@@ -196,15 +211,24 @@ def encontrar_ruta(mundo, x1, y1, x2, y2):
         mundo._pf_rutas = rcache
     if clave in rcache:
         v = rcache[clave]
-        return [] if v is None else list(v)
+        if v is None:
+            return []
+        if angulo_actual is not None:
+            radio_c = float(mundo.cfg.robot_radius_px)
+            return _suavizar(mundo, list(v), radio_c, angulo_actual, x1, y1)
+        return list(v)
     path = _a_estrella(mundo, r0, c0, r1, c1)
     if path is None:
         rcache[clave] = None
         return []
     radio = float(mundo.cfg.robot_radius_px)
     px = [(c * gs + gs / 2, r * gs + gs / 2) for r, c in path]
-    res = _suavizar(mundo, px, radio)
+    # La guardia anti-180 depende de la orientacion: no se puede cachear por
+    # celdas. Se cachea la version neutra y se aplica la guardia por llamada.
+    res_base = _suavizar(mundo, px, radio)
     if len(rcache) > 40000:
         rcache.clear()
-    rcache[clave] = res
-    return list(res)
+    rcache[clave] = res_base
+    if angulo_actual is not None:
+        return _suavizar(mundo, list(res_base), radio, angulo_actual, x1, y1)
+    return list(res_base)

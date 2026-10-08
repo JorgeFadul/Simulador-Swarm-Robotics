@@ -1,0 +1,8 @@
+map_width: 2000
+map_height: 2000
+grid_size: 20
+num_robots: 50
+nombre: Dos etapas 100x100 (50 robots)
+descripcion: 'Grid 100x100 (2000x2000 px) con 50 robots, Frontier Based + Voronoi.'
+walls: []
+defecto_num_blobs: 4

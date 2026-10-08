@@ -635,15 +635,17 @@ class Mundo:
                         rep_dy += dy / dist
                         count += 1
 
-        # Otros robots
+        # Otros robots (ganancia APF del gen GA g7, normalizada al
+        # default 2.5 para no cambiar el comportamiento base).
+        apf_gain = float(getattr(self.cfg, "ga_apf_repulsion", 2.5)) / 2.5
         for robot in self.robots:
             dx = x - robot.x
             dy = y - robot.y
             dist = math.hypot(dx, dy)
             min_dist = radius + robot.radius
             if dist < min_dist and dist > 0.1:
-                rep_dx += dx / dist
-                rep_dy += dy / dist
+                rep_dx += (dx / dist) * apf_gain
+                rep_dy += (dy / dist) * apf_gain
                 count += 1
 
         if count == 0:
@@ -751,6 +753,14 @@ class Mundo:
         self._invalidar_caches_planificacion()
         self._crear_paredes_perimetrales()
         self.reiniciar_exploracion()
+
+    def colisiones_totales(self):
+        """N_colisiones GA (Parte A): pared (rama bloqueada) + robot-robot."""
+        n = 0
+        for r in getattr(self, "robots", []) or []:
+            n += int(getattr(r, "colisiones_pared", 0))
+            n += int(getattr(r, "colisiones_rr", 0))
+        return n
 
     def update(self, dt: float):
         for robot in self.robots:

@@ -1,0 +1,77 @@
+{
+  "mejor_global": {
+    "genoma": {
+      "w_cost": 0.18450269973777111,
+      "w_info": 5.848204375861985,
+      "w_defect": 12.04823452355977,
+      "alpha_dist": 2.3613328759546435,
+      "beta_rep": 3.4376337796167764,
+      "k_defectuoso": 2.441676261555623,
+      "k_sano": 0.4822369827368876,
+      "apf_repulsion": 7.273836148086928
+    },
+    "f1_mwh": 0.0,
+    "f2_s": 300.0,
+    "f3_error": 5036.453333333333
+  },
+  "frentes_por_escenario": {
+    "10x10_5r": 20,
+    "10x10_10r": 1
+  },
+  "hiperparametros": {
+    "poblacion": 20,
+    "generaciones": 10,
+    "reps": 3,
+    "mapas": [
+      10
+    ],
+    "robots": [
+      5,
+      10
+    ],
+    "bounds": {
+      "w_cost": [
+        0.001,
+        0.2
+      ],
+      "w_info": [
+        0.1,
+        10.0
+      ],
+      "w_defect": [
+        1.0,
+        15.0
+      ],
+      "alpha_dist": [
+        0.1,
+        2.5
+      ],
+      "beta_rep": [
+        1.2,
+        4.0
+      ],
+      "k_defectuoso": [
+        1.1,
+        3.0
+      ],
+      "k_sano": [
+        0.2,
+        0.9
+      ],
+      "apf_repulsion": [
+        0.5,
+        8.0
+      ]
+    },
+    "defaults": {
+      "w_cost": 0.02,
+      "w_info": 1.0,
+      "w_defect": 3.0,
+      "alpha_dist": 0.5,
+      "beta_rep": 2.0,
+      "k_defectuoso": 1.5,
+      "k_sano": 0.5,
+      "apf_repulsion": 2.5
+    }
+  }
+}

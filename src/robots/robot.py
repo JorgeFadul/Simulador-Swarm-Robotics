@@ -40,6 +40,11 @@ class Robot:
         self.scouteadas_robot = 0
         self.visitadas_robot = 0
         self.paredes_robot = 0
+        # Telemetria GA (Parte A): colisiones pared (rama bloqueada) y
+        # contactos robot-robot. N_colisiones = suma de ambos.
+        self.colisiones_pared = 0
+        self.colisiones_rr = 0
+        self._bloqueo_previo = False
         self.explored_robot = np.zeros((cfg.rows, cfg.cols), dtype=np.int8)
 
         # Inspeccion de baldosas por este robot (contadores y mapa con resultado)
@@ -58,6 +63,18 @@ class Robot:
         self.ruta = []
         self._ult_pos = (x, y)
         self._sin_avance = 0.0
+        # Histeresis de giro (anti-oscilacion 180): memoria del sentido.
+        self._last_turn_dir = 1.0
+        self._giro_bloqueado = False
+        self._giro_stuck_timer = 0.0
+        self._giro_stuck_pos = (x, y)
+        self._giro_stuck_ang = self.angle
+        self._rw_evasion = None
+        self._giro_rw_timer = 0.0
+        self._destino_final = None
+        self._destino_final_goal = None
+        # Modo de marcha en dirigido: FORWARD / REVERSE / PIVOT (con latch).
+        self._modo_marcha = "FORWARD"
 
         # Cola de tareas (Fase 3): lista de dicts {x, y, costo} ordenada por el
         # planificador por prioridad (menor costo primero). El robot la consume
@@ -110,6 +127,8 @@ class Robot:
         self.duration = 0.0
 
     def _elegir_nuevo_recorrido(self):
+        self._rw_evasion = None
+        self._giro_rw_timer = 0.0
         self.target_angle = self.rng.uniform(0, 2 * math.pi)
         self.target_speed = self.rng.uniform(0.5, 1.0) * self.max_speed
         self.duration = self.rng.uniform(
@@ -127,7 +146,7 @@ class Robot:
             self._poner_en_marcha()
         else:
             self.state = self.ROTATING
-            direction = 1.0 if diff > 0 else -1.0
+            direction = self._elegir_dir_giro(diff)
             self.omega = direction * self.turn_speed
             self.speed = 0.0
             self.vx = 0.0
@@ -149,6 +168,83 @@ class Robot:
         diff = target - current
         return math.atan2(math.sin(diff), math.cos(diff))
 
+    def _elegir_dir_giro(self, diff):
+        """Sentido de giro con histeresis anti-180.
+
+        En la banda ambigua (| |diff| - pi | < banda) se conserva el sentido
+        previo en vez de alternar con el signo ruidoso de `diff`. El bloqueo
+        se activa al superar `entrada` y se libera por debajo de `salida`.
+        """
+        entrada = math.radians(getattr(self.cfg, "giro_histeresis_entrada_deg", 160.0))
+        salida = math.radians(getattr(self.cfg, "giro_histeresis_salida_deg", 30.0))
+        banda = math.radians(getattr(self.cfg, "giro_banda_180_deg", 20.0))
+        if abs(diff) < 1e-9:
+            return self._last_turn_dir
+        if abs(abs(diff) - math.pi) < banda and self._giro_bloqueado:
+            return self._last_turn_dir
+        if abs(diff) >= entrada:
+            if not self._giro_bloqueado:
+                self._last_turn_dir = 1.0 if diff > 0 else -1.0
+                self._giro_bloqueado = True
+            return self._last_turn_dir
+        if abs(diff) <= salida:
+            self._giro_bloqueado = False
+            self._last_turn_dir = 1.0 if diff > 0 else -1.0
+            return self._last_turn_dir
+        if self._giro_bloqueado:
+            return self._last_turn_dir
+        self._last_turn_dir = 1.0 if diff > 0 else -1.0
+        return self._last_turn_dir
+
+    def _flanco_despejado(self, mundo):
+        """Elige +1/-1 segun que flanco (+-90) esta mas despejado."""
+        for ang, nombre in ((self.angle + math.pi / 2, "+90"),
+                            (self.angle - math.pi / 2, "-90")):
+            _ = nombre
+        libre_mas = mundo.colision_frontal(
+            self.x, self.y, math.cos(self.angle + math.pi / 2) * self._lookahead_colision(),
+            math.sin(self.angle + math.pi / 2) * self._lookahead_colision(),
+            self.radius, mundo.robots, solo_descubiertas=True)
+        libre_menos = mundo.colision_frontal(
+            self.x, self.y, math.cos(self.angle - math.pi / 2) * self._lookahead_colision(),
+            math.sin(self.angle - math.pi / 2) * self._lookahead_colision(),
+            self.radius, mundo.robots, solo_descubiertas=True)
+        if libre_mas and not libre_menos:
+            return -1.0
+        if libre_menos and not libre_mas:
+            return 1.0
+        return self._last_turn_dir
+
+    def _trasera_libre(self, mundo):
+        """True si no hay colision yendo recto hacia atras (misma semantica
+        `solo_descubiertas` que el chequeo frontal)."""
+        look = self._lookahead_colision()
+        return not mundo.colision_frontal(
+            self.x, self.y,
+            -math.cos(self.angle) * look, -math.sin(self.angle) * look,
+            self.radius, mundo.robots, solo_descubiertas=True)
+
+    def _limitar_velocidad(self):
+        """Punto unico de control: ninguna estrategia puede superar la
+        velocidad maxima (ni la reversa maxima) en ningun momento. Deja
+        `vx/vy` coherentes con `speed`."""
+        vmax = self.max_speed
+        vmin = -vmax * getattr(self.cfg, "marcha_atras_factor_vel", 0.5)
+        if self.target_speed > vmax:
+            self.target_speed = vmax
+        elif self.target_speed < vmin:
+            self.target_speed = vmin
+        if self.speed > vmax:
+            self.speed = vmax
+        elif self.speed < vmin:
+            self.speed = vmin
+        if self.state == self.MOVING and self.speed != 0:
+            self.vx = math.cos(self.angle) * self.speed
+            self.vy = math.sin(self.angle) * self.speed
+        else:
+            self.vx = 0.0
+            self.vy = 0.0
+
     def asignar_objetivo(self, x, y, mundo):
         """Asigna un objetivo (px) al robot y planifica una ruta hacia el."""
         self.goal = (float(x), float(y))
@@ -159,7 +255,19 @@ class Robot:
         self.timed_out = False
         self._ult_pos = (self.x, self.y)
         self._sin_avance = 0.0
-        self.ruta = encontrar_ruta(mundo, self.x, self.y, self.goal[0], self.goal[1])
+        self._last_turn_dir = 1.0
+        self._giro_bloqueado = False
+        self._giro_stuck_timer = 0.0
+        self._giro_stuck_pos = (self.x, self.y)
+        self._giro_stuck_ang = self.angle
+        self._evadir_rumbo = None
+        self._rw_evasion = None
+        self._giro_rw_timer = 0.0
+        self._destino_final = None
+        self._destino_final_goal = None
+        self._modo_marcha = "FORWARD"
+        self.ruta = encontrar_ruta(mundo, self.x, self.y, self.goal[0], self.goal[1],
+                                   angulo_actual=self.angle)
         if not self.ruta:
             self.goal_alcanzado = True
             self.timed_out = True
@@ -245,6 +353,16 @@ class Robot:
         self.celda_probando = None
         self.cola_tareas = []
         self.con_cola = False
+        self._giro_bloqueado = False
+        self._giro_stuck_timer = 0.0
+        self._giro_stuck_pos = (self.x, self.y)
+        self._giro_stuck_ang = self.angle
+        self._evadir_rumbo = None
+        self._rw_evasion = None
+        self._giro_rw_timer = 0.0
+        self._destino_final = None
+        self._destino_final_goal = None
+        self._modo_marcha = "FORWARD"
 
     def reiniciar_objetivo(self):
         self.cancelar_objetivo()
@@ -254,6 +372,8 @@ class Robot:
         self.scouteadas_robot = 0
         self.visitadas_robot = 0
         self.paredes_robot = 0
+        self.colisiones_pared = 0
+        self.colisiones_rr = 0
         self.inspec_robot.fill(0)
         self.resultado_robot.fill(-1)
         self.inspeccionadas_robot = 0
@@ -512,19 +632,58 @@ class Robot:
         En modos de inspeccion (RW Inspeccion o RW Hibrido), al terminar
         cada tramo el robot inspecciona la celda actual si aun no ha sido
         inspeccionada, antes de elegir un nuevo rumbo.
+
+        El rumbo de evasion se congela (latch): mientras el peligro persiste
+        no se re-emite un giro por frame con el vector de repulsion ruidoso
+        (eso alternaba entre dos rumbos sin avanzar jamas).
         """
+        if self._rw_evasion is not None:
+            self._giro_rw_timer += dt
+            if self._giro_rw_timer >= getattr(self.cfg, "rw_giro_timeout_s", 1.0):
+                # Evasion latched sin converger: salir por el flanco despejado.
+                self._rw_evasion = None
+                self._giro_rw_timer = 0.0
+                flanco = self._flanco_despejado(mundo)
+                self._last_turn_dir = flanco
+                self._giro_bloqueado = False
+                self._iniciar_giro(self.angle + flanco * math.pi / 2)
+                return
         if self.state == self.MOVING:
             self.timer += dt
             if hay_peligro:
                 self._frenar()
                 if has_obs:
                     direccion_libre = math.atan2(rep_dy, rep_dx)
-                    self._iniciar_giro(direccion_libre)
+                    latch = math.radians(getattr(self.cfg, "rw_evasion_latch_deg", 25.0))
+                    if (self._rw_evasion is None or abs(
+                            self._diferencia_angular(direccion_libre,
+                                                     self._rw_evasion)) > latch):
+                        self._rw_evasion = direccion_libre
+                        self._giro_rw_timer = 0.0
+                        self._iniciar_giro(direccion_libre)
+                    elif abs(self._diferencia_angular(self._rw_evasion,
+                                                      self.angle)) <= self.turn_threshold:
+                        # Ya alineado al rumbo latched: avanzar (se aleja del
+                        # obstaculo; la fisica frena ante choque real).
+                        self._rw_evasion = None
+                        self._giro_rw_timer = 0.0
+                        self.target_angle = self.angle
+                        self.state = self.MOVING
+                        self.target_speed = self.max_speed
+                        self._poner_en_marcha()
+                    # Giro en curso hacia el rumbo latched: la rama ROTATING
+                    # lo continua sin re-emitir (sin flicker).
                 else:
+                    self._rw_evasion = None
+                    self._giro_rw_timer = 0.0
                     self._decide_inspeccion_o_rumbo(mundo)
             elif self.timer >= self.duration:
+                self._rw_evasion = None
+                self._giro_rw_timer = 0.0
                 self._decide_inspeccion_o_rumbo(mundo)
             else:
+                self._rw_evasion = None
+                self._giro_rw_timer = 0.0
                 self._poner_en_marcha()
 
         elif self.state == self.ROTATING:
@@ -811,7 +970,7 @@ class Robot:
             self.omega = 0.0
             self.angle = destino
         else:
-            self.omega = math.copysign(self.turn_speed, diff)
+            self.omega = self._elegir_dir_giro(diff) * self.turn_speed
             self.angle += self.omega * dt
             self.angle = math.atan2(math.sin(self.angle), math.cos(self.angle))
 
@@ -932,7 +1091,8 @@ class Robot:
         gx, gy = self.goal
 
         if not self.ruta:
-            self.ruta = encontrar_ruta(mundo, self.x, self.y, gx, gy)
+            self.ruta = encontrar_ruta(mundo, self.x, self.y, gx, gy,
+                                       angulo_actual=self.angle)
             if not self.ruta:
                 self.goal_alcanzado = True
                 self.timed_out = True
@@ -944,6 +1104,11 @@ class Robot:
         if dist <= self.goal_reached_radius:
             self.ruta.pop(0)
 
+        # Tramo final: ruta vacia y objetivo al centro de la celda. El rumbo
+        # se congela (sin repulsion ni re-evaluacion por frame) para que el
+        # centrado no cacee entre dos direcciones opuestas justo antes de la
+        # percusion. El freno fisico sigue protegiendo del choque.
+        tramo_final = False
         if ((mundo.etapa == "inspeccion" or self.cfg.modo_fase == "hibrido"
                 or self.cfg.fly_auto_inspeccion)
                 and math.hypot(gx - self.x, gy - self.y) <= self.goal_reached_radius):
@@ -962,6 +1127,7 @@ class Robot:
                     self._esperar_objetivo()
                 return
             tx, ty = gx, gy
+            tramo_final = True
         elif not self.ruta:
             # En la etapa de Inspeccion (2E), al llegar al objetivo el robot
             # hace una ultima aproximacion hacia el centro de la celda y se
@@ -981,6 +1147,7 @@ class Robot:
                     self._iniciar_inspeccion(mundo, forzar=True)
                     return
                 tx, ty = gx, gy
+                tramo_final = True
             else:
                 self.goal_alcanzado = True
                 self._esperar_objetivo()
@@ -988,19 +1155,39 @@ class Robot:
         else:
             tx, ty = self.ruta[0]
 
-        destino = math.atan2(ty - self.y, tx - self.x)
+        if tramo_final:
+            # Junto a la meta el giro corto manda: se suelta el bloqueo de
+            # histéresis para que un rebase menor no obligue a cerrar un
+            # círculo completo alrededor del punto (el "dar vueltas").
+            self._giro_bloqueado = False
+        if tramo_final and self._destino_final is not None \
+                and self._destino_final_goal == (gx, gy):
+            # Rumbo congelado del tramo final: ni repulsion ni evasion lo
+            # tocan; solo el pivote por colision real (mas abajo) puede girar.
+            destino = self._destino_final
+            rep_cx, rep_cy, has_obs_c = 0.0, 0.0, False
+        else:
+            destino = math.atan2(ty - self.y, tx - self.x)
+            if tramo_final:
+                self._destino_final = destino
+                self._destino_final_goal = (gx, gy)
+            else:
+                self._destino_final = None
+                self._destino_final_goal = None
 
-        # Repulsion de corto alcance para el rumbo. El sensor largo (50 px)
-        # tira del heading con paredes lejanas: en pasillos anchos anula la
-        # direccion al objetivo y el robot se desliza en paralelo a la pared
-        # (orbitando sin avanzar). Aqui solo se mezcla la repulsion con
-        # obstaculos REALMENTE cercanos; la colision frontal la maneja la rama
-        # de evasion o el pivote, no el heading.
-        rep_cx, rep_cy, has_obs_c = mundo.detectar_en_rango(
-            self.x, self.y, self._radio_evasion_activa()
-        )
+            # Repulsion de corto alcance para el rumbo. El sensor largo (50 px)
+            # tira del heading con paredes lejanas: en pasillos anchos anula la
+            # direccion al objetivo y el robot se desliza en paralelo a la pared
+            # (orbitando sin avanzar). Aqui solo se mezcla la repulsion con
+            # obstaculos REALMENTE cercanos; la colision frontal la maneja la rama
+            # de evasion o el pivote, no el heading.
+            rep_cx, rep_cy, has_obs_c = mundo.detectar_en_rango(
+                self.x, self.y, self._radio_evasion_activa()
+            )
 
-        if colision_inminente and not has_obs_c:
+        if tramo_final:
+            pass  # destino puro congelado: sin mezcla ni evasion de rumbo
+        elif colision_inminente and not has_obs_c:
             # Evasion consciente del objetivo (frente bloqueado y sin vector de
             # repulsion util): se toma un rumbo de evasion FIJO en el mundo, 45
             # grados hacia el flanco que acorta el angulo hacia la meta (derecha
@@ -1012,12 +1199,22 @@ class Robot:
             paso_ev = math.radians(45.0)
             umbral_ev = math.radians(self.cfg.dirigido_umbral_giro_deg)
             diff_meta = self._diferencia_angular(destino, self.angle)
-            lado = math.copysign(1.0, diff_meta) if abs(diff_meta) > 1e-6 else 1.0
+            banda = math.radians(getattr(self.cfg, "giro_banda_180_deg", 20.0))
+            meta_atras = abs(abs(diff_meta) - math.pi) < banda
             rumbo = getattr(self, "_evadir_rumbo", None)
             if rumbo is None:
-                rumbo = self.angle + lado * paso_ev
+                # Meta trasera (~180) con frente bloqueado: elegir UNA vez el
+                # flanco despejado y congelarlo (no re-evaluar lado cada frame).
+                if meta_atras:
+                    self._last_turn_dir = self._flanco_despejado(mundo)
+                    self._giro_bloqueado = True
+                else:
+                    self._elegir_dir_giro(diff_meta)
+                rumbo = self.angle + self._last_turn_dir * paso_ev
             elif abs(self._diferencia_angular(rumbo, self.angle)) <= umbral_ev:
-                rumbo = self.angle + lado * paso_ev
+                if not meta_atras:
+                    self._elegir_dir_giro(diff_meta)
+                rumbo = self.angle + self._last_turn_dir * paso_ev
             self._evadir_rumbo = rumbo
             destino = rumbo
         elif has_obs_c:
@@ -1052,7 +1249,8 @@ class Robot:
         self._esperando_esquina = esperando
         if giro_esquina:
             self._esperando_esquina = True
-            self.omega = math.copysign(min(self.turn_speed, kp * abs(diff)), diff)
+            self._modo_marcha = "PIVOT"
+            self.omega = self._elegir_dir_giro(diff) * min(self.turn_speed, kp * abs(diff))
             self.angle += self.omega * dt
             self.angle = math.atan2(math.sin(self.angle), math.cos(self.angle))
             self.speed = 0.0
@@ -1067,7 +1265,13 @@ class Robot:
             # El arco cerrado no es accesible (obstruccion frontal y se necesita
             # un giro grande): se pivota en el centro, giro en 360° sobre una
             # rueda quieta, sin avance (v=0), como un robot diferencial real.
-            self.omega = math.copysign(self.turn_speed, diff)
+            # Con meta trasera se pivota hacia el flanco despejado congelado.
+            banda = math.radians(getattr(self.cfg, "giro_banda_180_deg", 20.0))
+            if abs(abs(diff) - math.pi) < banda and (has_obs_c or has_obs):
+                self._last_turn_dir = self._flanco_despejado(mundo)
+                self._giro_bloqueado = True
+            self._modo_marcha = "PIVOT"
+            self.omega = self._elegir_dir_giro(diff) * self.turn_speed
             self.angle += self.omega * dt
             self.angle = math.atan2(math.sin(self.angle), math.cos(self.angle))
             self.speed = 0.0
@@ -1078,9 +1282,40 @@ class Robot:
             self.target_angle = self.angle
             return
 
-        if abs(diff) <= umbral:
+        # Marcha atras con latch: la meta queda muy atras y cerca con la
+        # trasera libre -> retroceder recto (heading fijo) en vez de girar.
+        # Curvas cerradas lejanas o con trasera bloqueada caen al pivote o al
+        # arco de arriba. La histéresis evita ditherear avance/reversa.
+        rev_entrada = math.radians(getattr(self.cfg, "marcha_atras_diff_entrada_deg", 150.0))
+        rev_salida = math.radians(getattr(self.cfg, "marcha_atras_diff_salida_deg", 120.0))
+        rev_dist = getattr(self.cfg, "marcha_atras_dist_mult", 4.0) * self.radius
+        if self._modo_marcha == "REVERSE":
+            if abs(diff) < rev_salida or dist > rev_dist * 1.5 \
+                    or not self._trasera_libre(mundo):
+                self._modo_marcha = "FORWARD"
+        elif abs(diff) > rev_entrada and dist < rev_dist \
+                and self._trasera_libre(mundo):
+            self._modo_marcha = "REVERSE"
+        if self._modo_marcha == "REVERSE":
+            # Al salir de reversa el giro corto manda (sin herencia del latch).
+            self._giro_bloqueado = False
             self.omega = 0.0
-            self.angle = destino
+            v_rev = getattr(self.cfg, "marcha_atras_factor_vel", 0.5) * self.max_speed
+            # Frenado de llegada simetrico: imposible pasarse tambien atras.
+            v_allow = 0.5 * dist / max(dt, 1e-6)
+            self.speed = -min(v_rev, v_allow)
+            self.target_speed = self.speed
+            self.target_angle = self.angle
+            self.state = self.MOVING
+            self.vx = math.cos(self.angle) * self.speed
+            self.vy = math.sin(self.angle) * self.speed
+            return
+
+        if abs(diff) <= umbral:
+            self._modo_marcha = "FORWARD"
+            self.omega = 0.0
+            if not tramo_final:
+                self.angle = destino
             self.speed = self.max_speed
             self.target_speed = self.max_speed
         else:
@@ -1091,12 +1326,24 @@ class Robot:
             # arco permite a esa velocidad, la velocidad baja y el giro se va
             # cerrando (transicion suave hacia el pivotaje).
             omega_deseada = min(self.turn_speed, kp * abs(diff))
-            self.omega = math.copysign(omega_deseada, diff)
+            self._modo_marcha = "FORWARD"
+            self.omega = self._elegir_dir_giro(diff) * omega_deseada
             self.angle += self.omega * dt
             self.angle = math.atan2(math.sin(self.angle), math.cos(self.angle))
             # Velocidad lineal limitada por el radio de giro físico del robot
             self.speed = min(self.max_speed, omega_deseada * radio_cerrado)
             self.target_speed = self.speed
+
+        if tramo_final:
+            # Perfil de llegada: velocidad plena hasta 1 radio del punto;
+            # dentro, frenado proporcional que avanza medio resto por frame
+            # (paso < dist, imposible pasarse) hasta caer en el centrado.
+            d_meta = math.hypot(gx - self.x, gy - self.y)
+            if d_meta < self.radius:
+                v_allow = 0.5 * d_meta / max(dt, 1e-6)
+                if self.speed > v_allow:
+                    self.speed = max(v_allow, 0.0)
+                    self.target_speed = self.speed
 
         self.target_angle = destino
         self.state = self.MOVING
@@ -1151,10 +1398,52 @@ class Robot:
         else:
             self._esperar_objetivo()
 
-        # Movimiento
-        if self.state == self.MOVING and self.speed > 0:
+        # La maxima siempre manda: se refresca desde la config (el panel la
+        # puede cambiar en vivo) y se aplica el tope unico a todo lo que las
+        # estrategias hayan comandado este frame.
+        self.max_speed = self.cfg.robot_max_speed_px_s
+        self._limitar_velocidad()
+
+        # Anti-atasco en pivote: ROTATING sin desplazamiento real NI progreso
+        # angular (flicker entre dos rumbos: el heading neto no avanza). Solo
+        # entonces se aplica el desbloqueo determinista hacia el sentido
+        # memorizado; un pivote legitimo progresa en angulo y nunca lo dispara.
+        if self.state == self.ROTATING:
+            umbral_d = getattr(self.cfg, "giro_sin_avance_dist_px", 2.0)
+            timeout = getattr(self.cfg, "giro_sin_avance_timeout_s", 0.4)
+            kick_deg = getattr(self.cfg, "giro_kick_deg", 90.0)
+            estatico = math.hypot(self.x - self._giro_stuck_pos[0],
+                                  self.y - self._giro_stuck_pos[1]) <= umbral_d
+            d_ang = abs(self._diferencia_angular(self.angle, self._giro_stuck_ang))
+            if estatico and d_ang <= math.radians(5.0):
+                self._giro_stuck_timer += dt
+            else:
+                self._giro_stuck_timer = 0.0
+                self._giro_stuck_pos = (self.x, self.y)
+                self._giro_stuck_ang = self.angle
+            if self._giro_stuck_timer >= timeout:
+                self.angle += self._last_turn_dir * math.radians(kick_deg)
+                self.angle = math.atan2(math.sin(self.angle), math.cos(self.angle))
+                self.target_angle = self.angle
+                self._evadir_rumbo = None
+                self._giro_stuck_timer = 0.0
+                self._giro_stuck_pos = (self.x, self.y)
+                self._giro_stuck_ang = self.angle
+                if self.goal_mode and self.goal is not None and not self.goal_alcanzado:
+                    self.ruta = encontrar_ruta(mundo, self.x, self.y,
+                                               self.goal[0], self.goal[1],
+                                               angulo_actual=self.angle)
+        else:
+            self._giro_stuck_timer = 0.0
+            self._giro_stuck_pos = (self.x, self.y)
+            self._giro_stuck_ang = self.angle
+
+        # Movimiento (avance y reversa: el signo de speed manda la direccion).
+        if self.state == self.MOVING and self.speed != 0:
             if self.speed < self.target_speed:
                 self.speed = min(self.target_speed, self.speed + 2.0 * self.max_speed * dt)
+            elif self.speed > self.target_speed:
+                self.speed = max(self.target_speed, self.speed - 2.0 * self.max_speed * dt)
             # Proteccion: la velocidad nunca debe superar la maxima
             if self.speed > self.max_speed:
                 self.speed = self.max_speed
@@ -1165,10 +1454,34 @@ class Robot:
             ny = self.y + self.vy * dt
 
             if mundo.colision_frontal(self.x, self.y, self.vx * dt, self.vy * dt, self.radius, mundo.robots):
+                en_reversa = self.speed < 0
+                # Conteo por EVENTO (flanco de subida): un bloqueo continuo
+                # de N frames cuenta como 1 colision, no N.
+                hay_vecino = False
+                try:
+                    for _ot in mundo.robots:
+                        if _ot is self:
+                            continue
+                        if math.hypot(_ot.x - self.x, _ot.y - self.y) < self.radius + _ot.radius + 2.0:
+                            hay_vecino = True
+                            break
+                except Exception:
+                    pass
+                if not self._bloqueo_previo:
+                    self.colisiones_pared += 1
+                    if hay_vecino:
+                        self.colisiones_rr += 1
+                self._bloqueo_previo = True
                 self._frenar()
-                p = mundo.descubrir_pared_frontal(self.x, self.y, self.angle, self.radius)
+                # En reversa se descubre la pared de atras (angulo + pi).
+                ang_desc = self.angle + math.pi if en_reversa else self.angle
+                p = mundo.descubrir_pared_frontal(self.x, self.y, ang_desc, self.radius)
                 self.paredes_robot += p
                 self._explorar_propio_colision(mundo)
+                if en_reversa:
+                    # Trasera bloqueada: abortar reversa (el latch no reentra
+                    # mientras siga bloqueada) y pivotar hacia la meta.
+                    self._modo_marcha = "FORWARD"
 
                 # --- Rutina de recuperación leve (Push-out & Anti-Stuck) ---
                 # Si el robot está atascado contra un obstáculo, aplique una leve separación cinemática
@@ -1189,7 +1502,8 @@ class Robot:
                     self._sin_avance = 0.0
 
                 if self.goal_mode and self.goal is not None and not self.goal_alcanzado:
-                    self.ruta = encontrar_ruta(mundo, self.x, self.y, self.goal[0], self.goal[1])
+                    self.ruta = encontrar_ruta(mundo, self.x, self.y, self.goal[0], self.goal[1],
+                                               angulo_actual=self.angle)
                     if not self.ruta:
                         self.goal_alcanzado = True
                         self.timed_out = True
@@ -1199,6 +1513,7 @@ class Robot:
             else:
                 self.x, self.y = nx, ny
                 self._sin_avance = 0.0
+                self._bloqueo_previo = False
                 # Rasterizacion de visita por area (radio del robot): cubre
                 # tambien las casillas libres adyacentes a paredes, evitando
                 # huecos de casillas sin visitar en los bordes de las paredes.

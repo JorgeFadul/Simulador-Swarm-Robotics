@@ -120,6 +120,13 @@ class Config:
         self.sample_cost_weight: float = float(raw.get("sample_cost_weight", 0.02))
         self.sample_targets: int = int(raw.get("sample_targets", 12))
 
+        # --- Meta-optimizador GA (Parte A): genes sin equivalente previo ---
+        # Rangos/defaults del plan de tesis (prevalecen sobre este yaml).
+        self.ga_w_info: float = float(raw.get("ga_w_info", 1.0))
+        self.ga_w_defect: float = float(raw.get("ga_w_defect", 3.0))
+        self.ga_beta_repulsion: float = float(raw.get("ga_beta_repulsion", 2.0))
+        self.ga_apf_repulsion: float = float(raw.get("ga_apf_repulsion", 2.5))
+
         self.dirigido_avance_min: float = float(raw.get("dirigido_avance_min", 0.45))
         self.dirigido_peso_evasion_imminente: float = float(raw.get("dirigido_peso_evasion_imminente", 0.5))
         self.dirigido_peso_evasion_fuerte: float = float(raw.get("dirigido_peso_evasion_fuerte", 0.4))
@@ -138,6 +145,23 @@ class Config:
         # centro (v=0).
         self.dirigido_giro_kp: float = float(raw.get("dirigido_giro_kp", 6.0))
         self.dirigido_pivote_umbral_deg: float = float(raw.get("dirigido_pivote_umbral_deg", 35.0))
+        # Histeresis de giro 180 (anti-oscilacion): zona ambigua, entrada y
+        # salida del bloqueo de sentido, y desbloqueo por falta de avance.
+        self.giro_histeresis_entrada_deg: float = float(raw.get("giro_histeresis_entrada_deg", 160.0))
+        self.giro_histeresis_salida_deg: float = float(raw.get("giro_histeresis_salida_deg", 30.0))
+        self.giro_banda_180_deg: float = float(raw.get("giro_banda_180_deg", 20.0))
+        self.giro_sin_avance_timeout_s: float = float(raw.get("giro_sin_avance_timeout_s", 0.4))
+        self.giro_sin_avance_dist_px: float = float(raw.get("giro_sin_avance_dist_px", 2.0))
+        self.giro_kick_deg: float = float(raw.get("giro_kick_deg", 90.0))
+        # Random Walk: latch del rumbo de evasion y timeout de giro latched.
+        self.rw_evasion_latch_deg: float = float(raw.get("rw_evasion_latch_deg", 25.0))
+        self.rw_giro_timeout_s: float = float(raw.get("rw_giro_timeout_s", 1.0))
+        # Marcha atras (modo dirigido): histéresis angular de entrada/salida,
+        # alcance maximo (multiplo del radio) y fraccion de velocidad maxima.
+        self.marcha_atras_diff_entrada_deg: float = float(raw.get("marcha_atras_diff_entrada_deg", 150.0))
+        self.marcha_atras_diff_salida_deg: float = float(raw.get("marcha_atras_diff_salida_deg", 120.0))
+        self.marcha_atras_dist_mult: float = float(raw.get("marcha_atras_dist_mult", 4.0))
+        self.marcha_atras_factor_vel: float = float(raw.get("marcha_atras_factor_vel", 0.5))
 
         self.walls: list[dict] = raw.get("walls", [])
 
@@ -372,7 +396,9 @@ class Config:
 
         self.sync_strategy()
 
-        for key in ("robot_radius_cm", "robot_max_speed_cm_s",
+        for key in ("ga_w_info", "ga_w_defect",
+                     "ga_beta_repulsion", "ga_apf_repulsion",
+                     "robot_radius_cm", "robot_max_speed_cm_s",
                     "robot_turn_speed_rad_s", "detection_radius_cm",
                     "exploration_radius_multiplier",
                     "random_walk_interval_min", "random_walk_interval_max",
@@ -387,8 +413,20 @@ class Config:
                     "dirigido_umbral_giro_deg",
                     "dirigido_gate_fuerte_dot",
                     "dirigido_gate_suave_dot",
-                    "dirigido_giro_kp",
-                    "dirigido_pivote_umbral_deg",
+                     "dirigido_giro_kp",
+                     "dirigido_pivote_umbral_deg",
+                     "giro_histeresis_entrada_deg",
+                     "giro_histeresis_salida_deg",
+                     "giro_banda_180_deg",
+                     "giro_sin_avance_timeout_s",
+                     "giro_sin_avance_dist_px",
+                     "giro_kick_deg",
+                     "rw_evasion_latch_deg",
+                     "rw_giro_timeout_s",
+                     "marcha_atras_diff_entrada_deg",
+                     "marcha_atras_diff_salida_deg",
+                     "marcha_atras_dist_mult",
+                     "marcha_atras_factor_vel",
                     "auction_defectivo_factor",
                     "auction_sano_factor",
                     "auction_profundidad_p",
@@ -419,3 +457,57 @@ class Config:
         self.robot_radius_px = self.robot_radius_cm * ppcm
         self.detection_radius_px = self.detection_radius_cm * ppcm
         self.robot_max_speed_px_s = self.robot_max_speed_cm_s * ppcm
+
+
+def aplicar_genoma(cfg, genome):
+    """Inyecta un genoma GA D=8 en un Config (rangos del plan prevalecen).
+
+    genome: vector (8,) o dict con claves GEN_NAMES. Devuelve el mismo cfg.
+    Mapeo: w_cost->sample_cost_weight, w_info->ga_w_info,
+    w_defect->ga_w_defect, alpha_dist->inspeccion_peso_distancia,
+    beta_rep->ga_beta_repulsion, k_defectuoso->inspeccion_factor_defectivo,
+    k_sano->inspeccion_factor_sano, apf_repulsion->ga_apf_repulsion.
+    """
+    from ..algorithms.genetic import GEN_NAMES, clip_to_bounds
+    import numpy as _np
+    if isinstance(genome, dict):
+        from ..algorithms.genetic import dict_to_genome
+        g = dict_to_genome(genome)
+    else:
+        g = clip_to_bounds(_np.asarray(genome, dtype=float))
+    cfg.sample_cost_weight = float(g[0])
+    cfg.ga_w_info = float(g[1])
+    cfg.ga_w_defect = float(g[2])
+    cfg.inspeccion_peso_distancia = float(g[3])
+    cfg.ga_beta_repulsion = float(g[4])
+    cfg.inspeccion_factor_defectivo = float(g[5])
+    cfg.inspeccion_factor_sano = float(g[6])
+    cfg.ga_apf_repulsion = float(g[7])
+    return cfg
+
+
+def genoma_a_yaml(path, genome, meta=None):
+    """Guarda el mejor genoma evolucionado en YAML (config/ga_best_config.yaml)."""
+    from ..algorithms.genetic import GEN_NAMES
+    import numpy as _np
+    if isinstance(genome, dict):
+        vals = [float(genome.get(n, 0.0)) for n in GEN_NAMES]
+    else:
+        vals = [float(v) for v in _np.asarray(genome, dtype=float).ravel()]
+    data = {n: v for n, v in zip(GEN_NAMES, vals)}
+    if meta:
+        data["meta"] = dict(meta)
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
+    return data
+
+
+def genoma_desde_yaml(path):
+    """Carga un genoma guardado con genoma_a_yaml. Devuelve (genome, meta)."""
+    import numpy as _np
+    from ..algorithms.genetic import GEN_NAMES, GEN_DEFAULTS
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    meta = data.pop("meta", {})
+    g = _np.array([float(data.get(n, d)) for n, d in zip(GEN_NAMES, GEN_DEFAULTS)])
+    return g, meta

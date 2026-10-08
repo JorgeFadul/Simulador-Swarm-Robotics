@@ -1,0 +1,14 @@
+w_cost: 0.18450269973777111
+w_info: 5.848204375861985
+w_defect: 12.04823452355977
+alpha_dist: 2.3613328759546435
+beta_rep: 3.4376337796167764
+k_defectuoso: 2.441676261555623
+k_sano: 0.4822369827368876
+apf_repulsion: 7.273836148086928
+meta:
+  f1_mwh: 0.0
+  f2_s: 300.0
+  f3_error: 5036.453333333333
+  estrategia_exploracion: Hybrid Based
+  estrategia_inspeccion: Voronoi

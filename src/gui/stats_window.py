@@ -40,6 +40,18 @@ _PARAM_LABELS = {
     "dirigido_umbral_giro_deg": "Umbral giro (deg)",
     "dirigido_giro_kp": "Ganancia giro proporcional",
     "dirigido_pivote_umbral_deg": "Umbral pivote (deg)",
+    "giro_histeresis_entrada_deg": "Histeresis giro entrada (deg)",
+    "giro_histeresis_salida_deg": "Histeresis giro salida (deg)",
+    "giro_banda_180_deg": "Banda ambigua 180 (deg)",
+    "giro_sin_avance_timeout_s": "Timeout giro atascado (s)",
+    "giro_sin_avance_dist_px": "Dist. giro atascado (px)",
+    "giro_kick_deg": "Salto desbloqueo giro (deg)",
+    "rw_evasion_latch_deg": "RW latch evasion (deg)",
+    "rw_giro_timeout_s": "RW timeout giro (s)",
+    "marcha_atras_diff_entrada_deg": "Reversa entrada (deg)",
+    "marcha_atras_diff_salida_deg": "Reversa salida (deg)",
+    "marcha_atras_dist_mult": "Reversa alcance (x radio)",
+    "marcha_atras_factor_vel": "Reversa factor vel.",
 }
 
 
@@ -424,7 +436,13 @@ class StatsWindow:
             ["sample_candidates", "sample_per_cluster", "sample_cost_weight", "sample_targets"])
         self._build_param_section(f, "Movimiento dirigido (Frontier / Sample / Hybrid Based)",
             ["dirigido_avance_min", "dirigido_umbral_giro_deg",
-             "dirigido_giro_kp", "dirigido_pivote_umbral_deg"])
+             "dirigido_giro_kp", "dirigido_pivote_umbral_deg",
+             "giro_histeresis_entrada_deg", "giro_histeresis_salida_deg",
+             "giro_banda_180_deg", "giro_sin_avance_timeout_s",
+             "giro_sin_avance_dist_px", "giro_kick_deg",
+             "rw_evasion_latch_deg", "rw_giro_timeout_s",
+             "marcha_atras_diff_entrada_deg", "marcha_atras_diff_salida_deg",
+             "marcha_atras_dist_mult", "marcha_atras_factor_vel"])
         self._build_param_section(f, "Evitacion reactiva (dirigido)",
             ["dirigido_peso_evasion_imminente",
              "dirigido_peso_evasion_fuerte",
@@ -587,6 +605,30 @@ class StatsWindow:
             cfg.dirigido_giro_kp = val
         elif key == "dirigido_pivote_umbral_deg":
             cfg.dirigido_pivote_umbral_deg = val
+        elif key == "giro_histeresis_entrada_deg":
+            cfg.giro_histeresis_entrada_deg = val
+        elif key == "giro_histeresis_salida_deg":
+            cfg.giro_histeresis_salida_deg = val
+        elif key == "giro_banda_180_deg":
+            cfg.giro_banda_180_deg = val
+        elif key == "giro_sin_avance_timeout_s":
+            cfg.giro_sin_avance_timeout_s = val
+        elif key == "giro_sin_avance_dist_px":
+            cfg.giro_sin_avance_dist_px = val
+        elif key == "giro_kick_deg":
+            cfg.giro_kick_deg = val
+        elif key == "rw_evasion_latch_deg":
+            cfg.rw_evasion_latch_deg = val
+        elif key == "rw_giro_timeout_s":
+            cfg.rw_giro_timeout_s = val
+        elif key == "marcha_atras_diff_entrada_deg":
+            cfg.marcha_atras_diff_entrada_deg = val
+        elif key == "marcha_atras_diff_salida_deg":
+            cfg.marcha_atras_diff_salida_deg = val
+        elif key == "marcha_atras_dist_mult":
+            cfg.marcha_atras_dist_mult = val
+        elif key == "marcha_atras_factor_vel":
+            cfg.marcha_atras_factor_vel = val
 
     def _sync_params_from_cfg(self):
         cfg = self.sim.cfg
@@ -616,6 +658,18 @@ class StatsWindow:
             "dirigido_umbral_giro_deg": str(cfg.dirigido_umbral_giro_deg),
             "dirigido_giro_kp": str(cfg.dirigido_giro_kp),
             "dirigido_pivote_umbral_deg": str(cfg.dirigido_pivote_umbral_deg),
+            "giro_histeresis_entrada_deg": str(cfg.giro_histeresis_entrada_deg),
+            "giro_histeresis_salida_deg": str(cfg.giro_histeresis_salida_deg),
+            "giro_banda_180_deg": str(cfg.giro_banda_180_deg),
+            "giro_sin_avance_timeout_s": str(cfg.giro_sin_avance_timeout_s),
+            "giro_sin_avance_dist_px": str(cfg.giro_sin_avance_dist_px),
+            "giro_kick_deg": str(cfg.giro_kick_deg),
+            "rw_evasion_latch_deg": str(cfg.rw_evasion_latch_deg),
+            "rw_giro_timeout_s": str(cfg.rw_giro_timeout_s),
+            "marcha_atras_diff_entrada_deg": str(cfg.marcha_atras_diff_entrada_deg),
+            "marcha_atras_diff_salida_deg": str(cfg.marcha_atras_diff_salida_deg),
+            "marcha_atras_dist_mult": str(cfg.marcha_atras_dist_mult),
+            "marcha_atras_factor_vel": str(cfg.marcha_atras_factor_vel),
         }
         for key, val in mapping.items():
             if key in self._param_vars:
@@ -651,6 +705,18 @@ class StatsWindow:
                 f"dirigido_umbral_giro_deg={cfg.dirigido_umbral_giro_deg}",
                 f"dirigido_giro_kp={cfg.dirigido_giro_kp}",
                 f"dirigido_pivote_umbral_deg={cfg.dirigido_pivote_umbral_deg}",
+                f"giro_histeresis_entrada_deg={cfg.giro_histeresis_entrada_deg}",
+                f"giro_histeresis_salida_deg={cfg.giro_histeresis_salida_deg}",
+                f"giro_banda_180_deg={cfg.giro_banda_180_deg}",
+                f"giro_sin_avance_timeout_s={cfg.giro_sin_avance_timeout_s}",
+                f"giro_sin_avance_dist_px={cfg.giro_sin_avance_dist_px}",
+                f"giro_kick_deg={cfg.giro_kick_deg}",
+                f"rw_evasion_latch_deg={cfg.rw_evasion_latch_deg}",
+                f"rw_giro_timeout_s={cfg.rw_giro_timeout_s}",
+                f"marcha_atras_diff_entrada_deg={cfg.marcha_atras_diff_entrada_deg}",
+                f"marcha_atras_diff_salida_deg={cfg.marcha_atras_diff_salida_deg}",
+                f"marcha_atras_dist_mult={cfg.marcha_atras_dist_mult}",
+                f"marcha_atras_factor_vel={cfg.marcha_atras_factor_vel}",
                 f"modo_fase={cfg.modo_fase}",
                 f"estrategia_exploracion={cfg.estrategia_exploracion}",
                 f"estrategia_inspeccion={cfg.estrategia_inspeccion}",
