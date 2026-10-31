@@ -1,220 +1,312 @@
 # Simulador Swarm 2D
 
-Simulador de exploración cooperativa para enjambres de robots móviles con sensado limitado (línea de vista). Pensado como herramienta de estudio y validación para la tesis de maestría en CIM (Control Industrial y Mecatrónica).
+Simulador de exploración e inspección cooperativa para enjambres de robots móviles en entornos bidimensionales discretizados (grid 2D) con sensado limitado por línea de vista (LOS - *Line of Sight*). Desarrollado como plataforma experimental y de validación para la tesis de maestría en Automatización y Robótica / CIM (Control Industrial y Mecatrónica).
 
-El sistema combina dos ventanas:
+El sistema opera tanto en modo gráfico interactivo (doble ventana: Pygame para renderizado del mapa/robots/sensores y Tkinter para telemetría en tiempo real y ajuste dinámico de hiperparámetros) como en modo *headless* de alto rendimiento para experimentos masivos, barridos de parámetros, optimización genética y entrenamiento de agentes mediante Aprendizaje por Refuerzo (RL) y modelos bioinspirados (Cerebro de Mosca Drosophila / Plasticidad Dopaminérgica).
 
-- **Ventana de mapa (Pygame):** renderiza el mundo, las celdas exploradas y los robots en tiempo real, e incluye un editor de escenarios.
-- **Ventana de estadísticas y control (Tkinter):** muestra métricas de cobertura por robot y global, y permite configurar parámetros sin tocar código.
+---
 
-## Características
+## Tabla de Contenidos
 
-- **Exploración SLAM por celda en tres niveles:** cada celda del mapa puede estar `SCOUTED` (avistada), `VISITED` (pisada por un robot) o `DISCOVERED` (es una pared que el robot ha visto o chocado).
-- **Sensado con línea de vista (LOS):** los sensores de los robots no atraviesan paredes. Una pared solo es `DISCOVERED` cuando un robot la ve o la choca físicamente (no se "adivina" la geometría).
-- **Exploración cooperativa multi-robot:** el planificador global genera objetivos desde el mapa combinado y los reparte entre los robots libres, reservando cada región de frontera en exclusiva para el robot que la trabaja (generación de objetivos + asignación de tareas por cercanía).
-- **Estrategias de exploración:** *Frontier Based* (Yamauchi), *Sample Based* (next-best-view por muestreo) e *Hybrid* (mejor punto de vista por región de frontera), además del *Random Walk*.
-- **Motion planning (A\*):** cada objetivo se planifica como una ruta de celdas sobre el mapa libre; las celdas exploradas tienen costo bajo y las desconocidas costo alto (se cruzan de forma optimista si es necesario).
-- **Movimiento por máquina de estados (solo Random Walk):** `STOPPED`, `ROTATING` y `MOVING`, con velocidad de giro limitada y detección de colisión frontal (obstáculos y otros robots).
-- **Movimiento dirigido continuo (tipo diferencial):** al perseguir un objetivo (Frontier/Sample/Hybrid) el robot avanza mientras gira hacia el siguiente waypoint, sin tramos de duración fija, sin abandono por timeout ni la secuencia de girar-total-y-luego-avanzar del random walk.
-- **Evitación reactiva de obstáculos:** vector de alejamiento promedio sobre obstáculos visibles dentro del radio de detección; en modo dirigido se combina con el rumbo al objetivo solo cuando el obstáculo está adelante, sin detener el avance ni renunciar a la meta.
-- **Exploración individual y global:** cada robot mantiene su propio mapa `explored_robot`, y el mapa global agrega todas las percepciones. Los objetivos se generan solo a partir del mapa descubierto (ningún robot conoce el mapa total).
-- **Visualización de la intención de movimiento:** línea punteada cian con punta de flecha que indica hacia dónde y cuánto avanzará el robot según su plan actual.
-- **Capas de planificación configurables:** las casillas de la pestaña Controles permiten mostrar u ocultar por separado la máscara de fronteras, los objetivos asignados y la línea de intención, sin detener la simulación.
-- **Editor integrado:** colocar robots, dibujar/borrar paredes por celda y cambiar el tamaño de la grilla.
-- **Configuración persistente:** los parámetros se cargan de `sim_config.txt` al iniciar (si el archivo no existe, se usan los valores por defecto de `config/default.yaml`).
-- **Mini-mapas por robot** en pantalla, más mapas de exploración individuales y métricas de cobertura en la ventana de estadísticas.
+1. [Características Principales](#características-principales)
+2. [Requisitos e Instalación](#requisitos-e-instalación)
+3. [Uso Rápido del Simulador](#uso-rápido-del-simulador)
+4. [Referencia Completa de Argumentos CLI (Headless y Parsing)](#referencia-completa-de-argumentos-cli-headless-y-parsing)
+5. [Modos de Operación y Estrategias](#modos-de-operación-y-estrategias)
+6. [Telemetría y Formato de Salida en Modo Headless](#telemetría-y-formato-de-salida-en-modo-headless)
+7. [Entrenamiento de Modelos RL y Bioinspirados](#entrenamiento-de-modelos-rl-y-bioinspirados)
+8. [Optimización Genética y Validación](#optimización-genética-y-validación)
+9. [Estructura del Repositorio](#estructura-del-repositorio)
 
-## Requisitos
+---
 
-- Python 3.10 o superior.
-- Paquetes listados en `requirements.txt`:
+## Características Principales
 
-```
-pygame>=2.5.0
-pyyaml>=6.0
-```
+- **SLAM y Descubrimiento en 3 Niveles:**
+  - `SCOUTED (1)`: Celda libre avistada mediante sensores con línea de vista (LOS mediante algoritmo de Bresenham).
+  - `VISITED (2)`: Celda física transitada por la huella de un robot.
+  - `DISCOVERED (3)`: Pared perimetral o interna detectada por línea de vista o por colisión física.
+- **Sensado Realista con Línea de Vista (LOS):** Los sensores no atraviesan obstáculos ni paredes. Las paredes ocultas detrás de otras estructuras no se "adivinan".
+- **Inspección de Defectos y Ground Truth:** Generación probabilística reproducible de parches (*blobs*) de defectos estructurales en el suelo del escenario para evaluar métricas de *recall*, tasa de detección y eficiencia energética ($J/\text{defecto}$).
+- **Modelo Energético Detallado:** Simulación de consumo dinámico por movimiento (aceleración, rotación, fricción lineal), consumo estático basal del sistema y consumo específico de inspección sensorial por celda.
+- **Doble Modo de Simulación:**
+  - **Dos Etapas (`dos_etapas`):** Fase 1 de Exploración total del mapa combinada + Fase 2 de Inspección exhaustiva de celdas libres (cobertura total de área).
+  - **Híbrido (`hibrido`):** Una única fase donde los robots exploran e inspeccionan concurrentemente al transitar las celdas.
+- **Múltiples Algoritmos de Coordinación:**
+  - Clásicos / Heurísticos: *Random Walk*, *Frontier-Based* (Yamauchi con reserva exclusiva dinámica), *Sample-Based* (Next-Best-View / Charrow), *Hybrid-Based*, *Boustrophedon* (descomposición celular morse/cobertura en pasadas paralelas) y *Voronoi* (partición espacial balanceada con asignación dinámica de POIs).
+  - Aprendizaje por Refuerzo (RL PPO): Modelos descentralizados e invariantes a la escala del enjambre (`RL Hibrido V3`, `RL Inspeccion V3`).
+  - Bioinspirado: `Cerebro Mosca (Dopamina)` / `Bio-RL` (modelo olfativo/antiguo de Drosophila con células de Kenyon, neuronas MBON y modulación por dopamina de plasticidad sináptica).
 
-Adicionalmente la ventana de estadísticas usa `Pillow` (PIL) para escalar los mini-mapas.
+---
 
-## Instalación
+## Requisitos e Instalación
 
-Desde la carpeta del proyecto:
+### Requisitos
 
-```bash
-python -m venv .venv
-.venv\Scripts\activate        # Windows
-# o: source .venv/bin/activate  # Linux/macOS
+- Python 3.10 o 3.11.
+- Tarjeta gráfica compatible (opcional para GUI; el modo *headless* y RL corren en CPU o con aceleración CUDA si PyTorch lo detecta).
 
-pip install -r requirements.txt
-pip install pillow
-```
+### Instalación
 
-## Ejecución
+1. Clonar el repositorio y acceder a la carpeta:
+   ```bash
+   git clone https://github.com/JorgeFadul/Tesis.git
+   cd Tesis/simulador-swarm-2d
+   ```
+
+2. Crear y activar un entorno virtual:
+   ```bash
+   # En Windows
+   python -m venv .venv
+   .venv\Scripts\activate
+
+   # En Linux / macOS
+   python3 -m venv .venv
+   source .venv/bin/activate
+   ```
+
+3. Instalar las dependencias del proyecto:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+*Las dependencias principales incluyen `pygame`, `pyyaml`, `numpy`, `Pillow`, `stable-baselines3`, `torch`, `scipy` y `matplotlib`.*
+
+---
+
+## Uso Rápido del Simulador
+
+### 1. Interfaz Gráfica (GUI Interactiva)
+
+Para iniciar el simulador con visualización en Pygame y ventana de control y estadísticas en Tkinter:
 
 ```bash
 python main.py
 ```
 
-Se abren las dos ventanas. Para salir, cierra la ventana de Pygame o presiona la X; la ventana de estadísticas se puede cerrar y reabrir sin romper el programa (quedará inactiva y el simulador seguirá corriendo).
+- **Ventana Pygame:** Muestra el mapa, celdas exploradas (grises/blancas), paredes detectadas (negras/rojas), defectos (amarillos/rojos) y los robots con sus vectores de intención y sensores cian. Incluye editor de paredes (`P`), robots (`R`) y borrador (`B`).
+- **Ventana Tkinter:** Pestañas de telemetría individual por robot, gráfico de barras, estado global, configuración de parámetros y selector en caliente de estrategias.
 
-## Controles
+### 2. Generar Mapas de Prueba Predeterminados
 
-### Editor (ventana de mapa)
+El repositorio cuenta con un generador automático de 5 escenarios estándar con diferente complejidad geométrica:
 
-| Tecla / Acción      | Efecto                                |
-|---------------------|---------------------------------------|
-| `R`                 | Seleccionar herramienta Robot         |
-| `P`                 | Seleccionar herramienta Pared         |
-| `B`                 | Seleccionar herramienta Borrar        |
-| Clic izquierdo      | Colocar robot o pared según herramienta |
-| Clic derecho        | Borrar robot o pared                  |
-| Arrastrar           | Dibujar pared continua                |
-| `ESC`               | Salir del modo simulación y volver al editor |
+```bash
+python main.py --generar-mapas
+```
+Esto asegura la creación de los escenarios YAML en la carpeta `mapas/`.
 
-### Ventana de estadísticas (pestañas)
+---
 
-- **Individual:** selecciona un robot del desplegable; muestra un gráfico de barras con sus métricas (celdas exploradas, visitadas, paredes vistas) y su mini-mapa de exploración.
-- **Cobertura:** vista general de la cobertura de exploración.
-- **Global:** tiempo simulado, FPS, pasos totales, porcentajes de cobertura y cantidad de robots.
-- **Controles:** herramientas, tamaño de grilla, población (botón "Poblar" agrega robots en posiciones libres), parámetros editables del robot, casillas para mostrar/ocultar capas de planificación (fronteras, objetivos e intención), botones de simular/pausar/detener y guardar/cargar configuración.
-- **Estrategias:** selector de estrategia (Random Walk, Frontier Based, Sample Based, Hybrid) y todos los parámetros de los generadores de objetivos (meta de descubrimiento, intervalo de planificación, radio de llegada, timeout de objetivo, tamaño mínimo de frontera y parámetros de muestreo) junto con los parámetros del movimiento dirigido (avance mínimo al girar, pesos de la evitación reactiva y umbral de giro), aplicables en caliente y guardables en `sim_config.txt`.
+## Referencia Completa de Argumentos CLI (Headless y Parsing)
 
-## Configuración
+El punto de entrada `main.py` incorpora un parser robusto de argumentos basado en `argparse`. La sintaxis general es:
 
-### Archivo de parámetros guardados: `sim_config.txt`
+```bash
+python main.py [OPCIONES]
+```
 
-Formato `clave=valor`, una por línea. Se escribe con el botón "Guardar config" de la pestaña Controles y se carga automáticamente al arrancar el programa.
+### Tabla Completa de Opciones CLI
 
-| Clave                             | Unidad      | Descripción                          |
-|-----------------------------------|-------------|--------------------------------------|
-| `robot_radius_cm`                 | cm          | Radio físico del robot               |
-| `robot_max_speed_cm_s`            | cm/s        | Velocidad lineal máxima              |
-| `robot_turn_speed_rad_s`          | rad/s       | Velocidad de giro                    |
-| `detection_radius_cm`             | cm          | Radio de detección de sensores       |
-| `exploration_radius_multiplier`   | (adim)      | Multiplicador del radio de exploración (mapa SLAM) |
-| `random_walk_interval_min`        | s           | Duración mínima de cada tramo de movimiento |
-| `random_walk_interval_max`        | s           | Duración máxima de cada tramo        |
-| `strategy`                        | -           | Estrategia de exploración (`Random Walk`, `Frontier Based`, `Sample Based`, `Hybrid`) |
-| `exploration_goal`                | (0-1)       | Fracción del mapa que debe descubrirse para completar la simulación |
-| `plan_interval_s`                 | s           | Intervalo de regeneración de objetivos y asignación de tareas |
-| `goal_reached_radius_px`          | px          | Radio de llegada para considerar alcanzado un objetivo |
-| `goal_timeout_s`                  | s           | Duración del `no_go`: cuánto se bloquea una celda objetivo inalcanzable antes de volver a proponerla |
-| `frontier_min_size`               | celdas      | Tamaño mínimo de una región de frontera para generar un objetivo |
-| `sample_candidates`               | -           | Candidatos muestreados por el generador *Sample Based* |
-| `sample_per_cluster`              | -           | Puntos de vista muestreados por región en *Hybrid* |
-| `sample_cost_weight`              | (adim)      | Peso del costo (distancia) en la función de puntaje |
-| `sample_targets`                  | -           | Máximo de objetivos devueltos por los generadores basados en muestreo |
-| `dirigido_avance_min`             | (adim)      | Fracción mínima de velocidad lineal mientras el robot gira para alinearse con el destino (movimiento dirigido) |
-| `dirigido_peso_evasion_imminente` | (adim)      | Peso del rumbo al objetivo cuando hay colisión inminente con un obstáculo al frente (dirigido) |
-| `dirigido_peso_evasion_fuerte`    | (adim)      | Peso del rumbo al objetivo cuando un obstáculo está claramente al frente (dirigido) |
-| `dirigido_peso_evasion_suave`     | (adim)      | Peso del rumbo al objetivo cuando un obstáculo está algo al frente (dirigido) |
-| `dirigido_umbral_giro_deg`        | grados      | Umbral de alineación con el waypoint para considerar terminado el giro (dirigido) |
+| Argumento | Tipo / Opciones | Por defecto | Descripción |
+|---|---|---|---|
+| `-h`, `--help` | Flag | - | Muestra el menú de ayuda y los argumentos disponibles. |
+| `--headless` | Flag | `False` | Ejecuta la simulación en memoria sin abrir interfaces gráficas (Pygame/Tkinter). Emite la telemetría en tiempo real por `stdout` en formato JSON Lines (JSONL) y genera reportes finales en `.json` y `.csv`. |
+| `--modo` | `dos_etapas`, `hibrido` | Configuración / `dos_etapas` | Selecciona el paradigma de misión: dos fases separadas (exploración $\to$ inspección) o fase unificada continua. |
+| `--estrategia-exploracion` | `Random Walk`, `Frontier Based`, `Sample Based`, `Hybrid Based`, `Boustrophedon` | `Frontier Based` | Estrategia activa durante la Fase 1 (Exploración) en modo `dos_etapas`. |
+| `--estrategia-inspeccion` | `Random Walk`, `Voronoi`, `Boustrophedon Inspeccion`, `Cerebro Mosca (Dopamina)`, `RL Inspeccion V3` | `Voronoi` | Estrategia activa durante la Fase 2 (Inspección) en modo `dos_etapas`. |
+| `--estrategia-hibrido` | `Random Walk Hibrido`, `RL Hibrido V3`, `Cerebro Mosca (Dopamina)` | `Random Walk Hibrido` | Estrategia de control para el modo `hibrido`. Si se especifica, activa automáticamente `--modo hibrido`. |
+| `--mapa` | Ruta a archivo YAML | `None` (usa default) | Carga un escenario específico (dimensiones, grilla, paredes, distribución de defectos y dotación de robots). |
+| `--semilla` | Entero (`int`) | `None` (aleatorio) | Fija la semilla pseudoaleatoria del generador global para garantizar reproducibilidad exacta en colocación de robots, ruido de sensores y navegación. |
+| `--generar-mapas` | Flag | `False` | Reconstruye o asegura la existencia de los 5 mapas estándar en `mapas/` y finaliza la ejecución inmediatamente. |
+| `--estrategia` | Cadena (*deprecated*) | `None` | Parámetro heredado por compatibilidad; mapea automáticamente estrategias antiguas o alias legados a su modo correspondiente. |
 
-Las distancias físicas (cm) se convierten a píxeles según `pixels_per_cm`. Si el archivo no existe, falta o un valor no es numérico, se ignora y se conservan los valores por defecto.
+### Ejemplos de Comandos en Modo Headless
 
-### Archivo base: `config/default.yaml`
+#### Ejemplo 1: Misión Dos Etapas clásica (Fronteras + Voronoi) con semilla fija
+```bash
+python main.py --headless --modo dos_etapas --estrategia-exploracion "Frontier Based" --estrategia-inspeccion "Voronoi" --semilla 42 --mapa mapas/mapa_test_1.yaml
+```
 
-Contiene la configuración de arranque: tamaño de mapa y grilla, `pixels_per_cm`, FPS, número de robots por defecto, parámetros físicos del robot, umbral de exploración y paredes iniciales (lista de rectángulos rotables).
+#### Ejemplo 2: Misión Dos Etapas sistemática (Boustrophedon + Boustrophedon Inspección)
+```bash
+python main.py --headless --modo dos_etapas --estrategia-exploracion "Boustrophedon" --estrategia-inspeccion "Boustrophedon Inspeccion" --semilla 123 --mapa mapas/mapa_rl_30x30.yaml
+```
 
-## Arquitectura
+#### Ejemplo 3: Misión Híbrida con Aprendizaje por Refuerzo Descentralizado (RL V3)
+```bash
+python main.py --headless --modo hibrido --estrategia-hibrido "RL Hibrido V3" --semilla 7 --mapa mapas/mapa_rl_20x20_10r.yaml
+```
+
+#### Ejemplo 4: Misión Híbrida Bioinspirada (Cerebro de Mosca / Dopamina)
+```bash
+python main.py --headless --modo hibrido --estrategia-hibrido "Cerebro Mosca (Dopamina)" --semilla 99 --mapa mapas/mapa_test_2.yaml
+```
+
+---
+
+## Modos de Operación y Estrategias
+
+### 1. Modo Dos Etapas (`--modo dos_etapas`)
+- **Fase 1 (Exploración):** El enjambre busca maximizar el porcentaje de celdas libres avistadas (`SCOUTED`) y delimitar todas las paredes (`DISCOVERED`). Se utiliza un planificador global basado en celdas de frontera o pasadas de barrido.
+- **Transición:** Cuando se alcanza la meta de cobertura (`exploration_goal`, típicamente 95% o 99%) o se agotan las fronteras accesibles, el simulador conmuta automáticamente a la Fase 2.
+- **Fase 2 (Inspección):** Los robots deben transitar físicamente sobre las celdas descubiertas para catalogarlas como `VISITED` e inspeccionar si contienen defectos estructurales en el piso.
+
+### 2. Modo Híbrido (`--modo hibrido`)
+No existe separación de fases: los robots exploran territorio virgen al tiempo que inspeccionan minuciosamente cada celda pisada. Este paradigma es el idóneo para algoritmos de **Aprendizaje por Refuerzo** y modelos **Bioinspirados**, ya que las recompensas (o señales dopaminérgicas) por descubrimiento y detección de defectos se alimentan de forma inmediata.
+
+---
+
+## Telemetría y Formato de Salida en Modo Headless
+
+Al invocar `main.py --headless`, la simulación imprime en tiempo real un flujo de eventos JSON por línea (`stdout`), lo que permite conectar el simulador a pipes, agentes externos o dashboards:
+
+```json
+{"t": 1.25, "paso": 25, "estado": "running", "estrategia": "Frontier Based", "modo_fase": "dos_etapas", "cobertura": {"mapa_pct": 14.2, "libres_pct": 18.5, "paredes_pct": 5.0}, "energia_total_j": 12.45, "bateria_min_pct": 98.2, "celdas": {"vistas": 150, "visitadas": 24, "inspeccionadas": 24, "defectuosas": 3}, "robots": [{"id": 0, "x": 120.5, "y": 85.0, "estado": "MOVING", "velocidad_cm_s": 15.0, "energia_consumida_j": 1.25, ...}]}
+```
+
+Al culminar la ejecución (por éxito o por límite de pasos `headless_max_pasos`), se generan automáticamente dos archivos en el directorio raíz:
+
+1. **Resumen Global (`headless_<modo>_<estrategia>_seed<N>.json`):**
+   - Contiene el resultado (`completado`, `limite_pasos`, `estancamiento`).
+   - Tiempos de simulación, pasos totales, balance energético discriminado (movimiento, inspección, picos de aceleración).
+   - Métricas de celdas y métricas individuales por robot.
+   - Estado matricial final del mapa de inspección y celdas defectuosas.
+2. **Serie Temporal (`headless_<modo>_<estrategia>_seed<N>.csv`):**
+   - Archivo tabular paso a paso con las columnas: `paso`, `t_s`, `cobertura_mapa_pct`, `cobertura_libres_pct`, `energia_total_j`, `celdas_vistas`, `celdas_visitadas`, `celdas_inspeccionadas` y `celdas_defectuosas`.
+
+---
+
+## Entrenamiento de Modelos RL y Bioinspirados
+
+El simulador incluye entornos vectorizados compatibles con Gymnasium / Stable-Baselines3 y controladores bioinspirados avanzados.
+
+### 1. Entrenamiento RL Híbrido V3 Descentralizado (`train_rl_v3_des.py`)
+
+Entrena una política neuronal con PPO (*Proximal Policy Optimization*) que es completamente invariante al número de robots $N$ y al tamaño del mapa mediante observaciones locales egocéntricas (parches $K \times K$), comunicación vecinal y señales de alerta por defectos:
+
+```bash
+python train_rl_v3_des.py [OPCIONES]
+```
+
+**Argumentos disponibles:**
+- `--timesteps`: Total de pasos de interacción de entrenamiento (por defecto `300000`, recomendado `5000000` para convergencia óptima).
+- `--num-robots`: Número de robots interactuando en el entorno de entrenamiento (por defecto `10`).
+- `--patch-size`: Dimensión de la ventana local egocéntrica $K \times K$ (por defecto `15`).
+- `--radio-alerta`: Radio de propagación en píxeles de la señal de alerta por celda defectuosa (por defecto `500.0`).
+- `--n-envs`: Cantidad de entornos paralelos (`SubprocVecEnv`). Si es `0`, detecta y utiliza automáticamente todos los núcleos de CPU disponibles.
+- `--out`: Directorio de guardado de los puntos de control (`checkpoints`) y modelo final (por defecto `models/v3_des`).
+
+**Ejemplo de ejecución:**
+```bash
+python train_rl_v3_des.py --timesteps 1000000 --num-robots 10 --patch-size 15 --radio-alerta 500.0 --out models/v3_des
+```
+
+---
+
+### 2. Entrenamiento RL de Exploración Pura V3 (`train_rl_v3_exp.py`)
+
+Especializado en aprendizaje por refuerzo descentralizado enfocado en la maximización de la tasa de descubrimiento de celdas libres y paredes con minimización de consumo energético:
+
+```bash
+python train_rl_v3_exp.py [OPCIONES]
+```
+
+**Argumentos disponibles:**
+- `--timesteps`: Pasos totales de entrenamiento (por defecto `300000`).
+- `--num-robots`: Cantidad de robots en la simulación (por defecto `10`).
+- `--patch-size`: Tamaño del parche de observación local (por defecto `15`).
+- `--radio-com`: Radio de comunicación cooperativa entre robots en píxeles (por defecto `400.0`).
+- `--reward-mode`: Función objetivo de penalización (`energy` o `time`; por defecto `energy`).
+- `--n-envs`: Número de entornos paralelos (0 = auto por núcleos de CPU).
+- `--out`: Carpeta de destino del modelo (por defecto `models/v3_exp`).
+
+**Ejemplo de ejecución:**
+```bash
+python train_rl_v3_exp.py --timesteps 2000000 --num-robots 10 --reward-mode energy --out models/v3_exp
+```
+
+---
+
+### 3. Entrenamiento Bioinspirado: Cerebro de Mosca / Dopamina (`train_bio_fly.py`)
+
+Implementa un modelo del cuerpo pedunculado (*Mushroom Body*) de la mosca *Drosophila melanogaster*. Consta de neuronas de proyección (PN), un estrato de células de Kenyon (KC) con codificación dispersa (*sparse coding*) y neuronas de salida (MBON) cuya sinapsis se modifica mediante plasticidad hebbiana modulada por dopamina (recompensa por celdas nuevas y celdas defectuosas; aversión por colisiones).
+
+El entrenamiento consolida en cada corrida la memoria del cerebro con mejor rendimiento evolutivo:
+
+```bash
+python train_bio_fly.py [OPCIONES]
+```
+
+**Argumentos disponibles:**
+- `--runs`: Cantidad de simulaciones/generaciones consecutivas (por defecto `30`).
+- `--robots`: Número de robots en el enjambre (si se omite, usa el valor definido en el mapa).
+- `--mapas`: Ruta a un mapa YAML o lista separada por comas de mapas para alternar entre runs (por defecto `mapas/mapa_test_1.yaml`).
+- `--kc`: Número de Kenyon Cells por cerebro (por defecto `1000`; valores menores aceleran el cómputo).
+- `--mutacion`: Tasa de perturbación relativa en pesos heredados $W_{\text{KC}\to\text{MBON}}$ (por defecto `0.02`).
+- `--max-steps`: Límite máximo de pasos por corrida antes de corte (por defecto `15000`).
+- `--max-segundos`: Límite de tiempo de reloj real por corrida (por defecto `300` s).
+- `--semilla`: Semilla base de la secuencia de generaciones (por defecto `42`).
+- `--defectos-semilla`: Semilla base para la distribución de defectos.
+- `--out`: Archivo NumPy `.npz` donde se guardan los pesos sinápticos consolidados (por defecto `models/bio/fly_swarm_latest.npz`).
+- `--reporte`: Archivo CSV con la evolución y curva de aprendizaje (por defecto `<out>.csv`).
+- `--reset-weights`: Flag para descartar pesos previos y reiniciar el aprendizaje desde cero.
+
+**Ejemplo de ejecución:**
+```bash
+python train_bio_fly.py --runs 50 --robots 10 --mapas mapas/mapa_test_1.yaml,mapas/mapa_test_2.yaml --kc 500 --mutacion 0.02 --out models/bio/fly_swarm_latest.npz
+```
+
+---
+
+## Optimización Genética y Validación
+
+El proyecto cuenta con herramientas para ajustar hiperparámetros de las heurísticas de movimiento y generar los análisis comparativos de la tesis:
+
+- **Optimización por Algoritmos Genéticos (`optimizar_ga.py`):**
+  Optimiza los parámetros de navegación dirigida y evitación de obstáculos:
+  ```bash
+  python optimizar_ga.py --poblacion 16 --generaciones 10 --mapa mapas/mapa_test_1.yaml
+  ```
+- **Generación de Gráficas de Tesis (`graficar_tesis_final.py` y `graficar_generalista.py`):**
+  Procesan los CSV de resultados para construir curvas de Pareto ($J/\text{defecto}$ vs. tiempo), curvas de cobertura temporal, leyes de escala $N^2/R$ y análisis de dotación óptima de robots.
+- **Validación de Defectos Ground Truth (`gt_defectos.py`):**
+  Calcula con precisión matemática el número exacto de celdas con defectos generadas para cada semilla y mapa, garantizando métricas de *recall* libres de sesgo.
+
+---
+
+## Estructura del Repositorio
 
 ```
 simulador-swarm-2d/
-├── main.py                    # Punto de entrada, bucle principal (Pygame + Tkinter)
-├── requirements.txt
-├── sim_config.txt             # Parámetros guardados (se carga al iniciar)
+├── main.py                     # Punto de entrada principal (GUI y Headless CLI)
+├── requirements.txt            # Dependencias del proyecto
+├── sim_config.txt              # Configuración persistente del simulador
+├── train_rl_v3_des.py          # Script de entrenamiento RL PPO Descentralizado V3
+├── train_rl_v3_exp.py          # Script de entrenamiento RL PPO Exploración V3
+├── train_bio_fly.py            # Script de entrenamiento modelo bioinspirado Drosophila
+├── optimizar_ga.py             # Optimizador genético de parámetros de navegación
+├── gt_defectos.py              # Cálculo de ground truth de defectos por semilla
+├── graficar_tesis_final.py     # Generador de gráficos de rendimiento y tesis
 ├── config/
-│   └── default.yaml           # Valores por defecto
+│   └── default.yaml            # Configuración base predeterminada
+├── mapas/                      # Escenarios de prueba YAML (10x10, 20x20, 30x30, 50x50...)
+├── models/                     # Checkpoints y pesos de RL y modelos bioinspirados
+│   ├── bio/                    # Pesos de Cerebro de Mosca (.npz)
+│   ├── v3_des/                 # Políticas entrenadas RL V3 Descentralizado
+│   └── v3_exp/                 # Políticas entrenadas RL V3 Exploración
 ├── src/
-│   ├── core/
-│   │   ├── config.py          # Config: carga de YAML y de sim_config.txt
-│   │   ├── mundo.py           # Mundo, grilla, LOS, paredes, sensores, colisiones
-│   │   └── simulacion.py      # Orquesta Pygame, editor y el bucle de simulación
-│   ├── robots/
-│   │   └── robot.py           # Máquina de estados, navegación por waypoints, exploración propia, intención
-│   ├── gui/
-│   │   ├── renderer.py        # Dibujado del mapa, robots, intención, fronteras y mini-mapas
-│   │   └── stats_window.py    # Ventana Tkinter de estadísticas y controles
-│   ├── algorithms/
-│   │   ├── exploration.py     # Generadores de objetivos y asignación de tareas (ExplorationPlanner)
-│   │   └── pathfinding.py     # A* ponderado sobre el grid para motion planning
-│   └── utils/                 # (utilidades)
+│   ├── algorithms/             # Heurísticas: Frontier, Sample, Voronoi, Boustrophedon, A*
+│   ├── bio/                    # Red neuronal bioinspirada de Drosophila (cuerpo pedunculado)
+│   ├── core/                   # Motor físico, mundo 2D, sensores LOS, telemetría y config
+│   ├── gui/                    # Renderizador Pygame y ventana de control Tkinter
+│   ├── rl/                     # Entornos Gym/Gymnasium vectorizados para RL
+│   └── robots/                 # Cinemática diferencial, máquina de estados y batería
+└── resultados_tesis_final/     # Resultados experimentales, series temporales y figuras
 ```
 
-## Modelo de exploración
+---
 
-### Tres estados por celda
+## Licencia y Créditos
 
-| Estado | Valor | Significado |
-|--------|------:|-------------|
-| `SCOUTED`   | 1 | Celda libre avistada por un sensor con línea de vista |
-| `VISITED`   | 2 | Celda libre por la que un robot pasó físicamente |
-| `DISCOVERED`| 3 | Celda de pared conocida (vista o chocada) |
-
-### Percepción con línea de vista
-
-- `tiene_linea_de_vista(x1,y1,x2,y2)` recorre la celda a celda con el algoritmo de Bresenham y devuelve `False` si hay una pared en el camino.
-- El sensado (`explorar_desde`, `detectar_en_rango`) solo considera paredes con línea de vista: no se puede explorar a través de una pared.
-- `detectar_en_rango` devuelve un vector de alejamiento promedio normalizado hacia afuera de los obstáculos visibles.
-
-### Colisiones y descubrimiento de paredes
-
-- La anticipación de colisión usa solo paredes `DISCOVERED` (`colision_frontal` con `solo_descubiertas=True`): el robot no puede "sentir" paredes que nunca ha visto.
-- Cuando el robot choca físicamente, `descubrir_pared_frontal` marca la pared como `DISCOVERED` (agrega información real al mapa) y el robot elige un nuevo recorrido.
-
-### Robot y movimiento
-
-Dos modos de movimiento:
-
-- **Random Walk:** la máquina de estados (`STOPPED` -> `ROTATING` -> `MOVING`) rota hacia el ángulo objetivo a velocidad limitada y luego avanza a velocidad crucero con aceleración suave. El temporizador de cada tramo (`timer`) **solo avanza mientras el robot está en `MOVING`**, por lo que el tiempo de giro no reduce la duración del movimiento planificado.
-- **Movimiento dirigido (objetivos del planificador):** es continuo y tipo diferencial: el robot gira hacia el siguiente waypoint a velocidad de giro limitada **mientras avanza** (la velocidad lineal se escala con el alineamiento, pivotando si hace falta), sin tramos con duración fija, sin abandono por timeout ni límite de avance. La evitación reactiva desvía el rumbo solo cuando hay un obstáculo al frente (mezclando la dirección al objetivo con el vector de repulsión) y, si el robot choca físicamente, descubre la pared y replanifica la ruta. No se aplica ninguna de las restricciones del random walk (ni de tiempo, ni de choques —aunque se evitan colisiones con paredes y otros robots—, ni girar-total-antes-de-avanzar, ni el avance acotado). Si un robot se queda sin objetivo (lo alcanzó, es inalcanzable o colisionó sin ruta alternativa), se **detiene y espera** a que el planificador le asigne la siguiente meta: no recurre al random walk. Los parámetros de este movimiento (avance mínimo al girar, pesos de la evitación reactiva y umbral de giro) se ajustan en la pestaña Estrategias.
-
-## Exploración cooperativa
-
-El esquema de planificación sigue tres etapas (generación de objetivos, asignación de tareas y motion planning):
-
-1. **Generación de objetivos** (`src/algorithms/exploration.py`). A partir del mapa combinado `mundo.explored` se calculan las celdas de frontera (libres exploradas adyacentes a desconocidas) y se agrupan en regiones conexas:
-   - `FrontierBased`: un objetivo por entidad en la celda más cercana a su centroide; el puntaje es el tamaño de la entidad (Yamauchi).
-   - `SampleBased`: muestrea candidatos aleatorios (NBV) y los puntúa por ganancia de área desconocida visible menos costo, quedándose con los mejores.
-   - `Hybrid`: muestrea varios puntos de vista por región de frontera y conserva el mejor de cada una (Charrow et al.).
-   - `Random Walk`: sin planificador; cada robot se mueve aleatoriamente.
-2. **Asignación de tareas** (`ExplorationPlanner`). Cada `plan_interval_s` se regeneran las regiones de frontera:
-   - `Frontier Based` y `Hybrid`: **asignación dinámica por costo con reserva exclusiva**. Las celdas de frontera se agrupan en entidades (regiones 8-conectadas, divididas si superan `frontier_max_size` celdas, por defecto `grid_size // 2`) y cada entidad tiene un único objetivo en la celda más cercana a su centroide. El costo de una entidad es `distancia_al_centroide / (celdas + 1)`, de modo que las fronteras grandes y cercanas quedan arriba en la lista de prioridad. Cada ciclo se recalculan los costos de todas las entidades contra todos los robots con su posición actual y cada entidad se **reserva en exclusiva** para un solo robot. Un robot en tránsito se reasigna si aparece una frontera significativamente más barata (umbral `reasignar_umbral_costo`, default 0.7); si quedan robots libres y no hay fronteras libres, van a la de menor costo aunque esté reservada (no quedan parados). No se usa preferencia de línea de vista.
-   - `Sample Based`: conserva su asignación por puntaje de ganancia, eligiendo el robot libre más cercano (con preferencia de línea de vista).
-   - Los objetivos inalcanzables (sin ruta A*) se marcan como `no_go` temporalmente para repartir a los robots.
-3. **Motion planning** (`src/algorithms/pathfinding.py`). Cada objetivo asignado se planifica con A* sobre el grid: las celdas libres exploradas tienen costo 1, las libres desconocidas costo 6 (se atraviesan de forma optimista si hace falta) y las paredes son intransitables. El robot sigue los waypoints con movimiento continuo tipo diferencial y, si hay un obstáculo al frente, desvía el rumbo con el vector de repulsión; si choca físicamente, descubre la pared y replanifica. Sin objetivo asignado, el robot se detiene y espera al planificador (no recurre al random walk).
-
-La simulación termina cuando el mapa combinado alcanza la fracción `exploration_goal` o cuando no quedan celdas de frontera (no se exige visitar todas las celdas, solo descubrir el mapa).
-
-### Intención de movimiento
-
-Cada robot expone su plan actual:
-
-- En modo random walk: `intent_tiempo_restante = max(0, duration - timer)` y `intent_distancia = target_speed * intent_tiempo_restante`.
-- En modo dirigido: el tiempo restante y la distancia se estiman hasta el siguiente waypoint de la ruta (`distancia al waypoint / velocidad actual`).
-
-El renderizador dibuja una línea punteada cian con punta de flecha en la dirección de `target_angle`, con longitud acotada a la `intent_distancia`, limitada a 260 px y detenida en la primera pared `DISCOVERED`. Se dibuja debajo de los robots para que estos queden siempre visibles.
-
-## Mini-mapas
-
-El renderer muestra en la esquina inferior derecha un panel semitransparente con un mini-mapa de 50 px por robot (4 por fila, 1 px por celda). El mapa individual de cada robot (pestaña "Individual") se escala con Pillow.
-
-## Pruebas
-
-No hay framework de pruebas configurado; la validación se hace con scripts headless que ejercitan la lógica pura (config, mundo, robot) sin abrir ventanas:
-
-- Carga de `sim_config.txt` y fallback a valores por defecto.
-- Línea de vista bloqueada y despejada.
-- Paredes detrás de paredes no descubiertas.
-- Sensores con línea de vista.
-- Colisión con `solo_descubiertas`.
-- Descubrimiento de pared frontal tras choque.
-- Ningún robot colocado dentro de una pared tras poblar 2000 veces.
-- API de intención de movimiento y su renderizado.
-- El temporizador de movimiento no avanza durante la rotación.
-- Generación de objetivos en las tres estrategias (Frontier/Sample/Hybrid).
-- Bucles completos de exploración hasta la terminación para las tres estrategias y el random walk (verificación headless).
-
-## Estado del proyecto
-
-Simulador funcional con editor, sensado por línea de vista, exploración SLAM por celda, exploración cooperativa multi-robot (frontier, sample e hybrid), motion planning con A*, asignación de tareas por planificador global, métricas por robot/global, persistencia de configuración y visualización de intención y fronteras.
+Desarrollado por **Jorge Fadul** como parte de la Tesis de Maestría en CIM (Control Industrial y Mecatrónica). Distribuido bajo licencia libre para fines académicos y de investigación.
